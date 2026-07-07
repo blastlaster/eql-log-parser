@@ -23,6 +23,19 @@ level, class combo, race, zone, and AFK detection. Non-friend `/who`
 searches never pollute the roster and can pop up in their own window.
 Per-character rosters persist between sessions.
 
+In order to get this working, you will need to follow some simple steps:
+1) On any chat window, create a new tab.
+2) Send all "/who" messages and "other" messages to this window
+3) To minimize annoyance, set not to highlight new messages.
+4) Press "L" and go to Socials
+5) Create a new macro with these settings: /friend | /who friend all | /pet who leader .
+7) Add this button to the last slot of your main hotbar (you can use another button, this is just my preference and what the guide will use).
+8) Press Alt+O to open Settings, then navigate to Controls > Hotbar 1 > Button 12 (or whatever button you place this).
+9) Change button 12 to match one of your movement keys (I use right: D).
+10) Doing this causes the macro to fire into the hidden chat channel every time you press that button.
+11) To update friends list details, press that direction.
+The tool will also display /who results in a separate window; right click on the main element and give it a try!
+
 **DPS/HPS Meter** (`eql_dps_meter.py`) — retro live combat meter: DPS, HPS,
 DTPS with melee/spell/song/damage-shield splits, damage sources split six
 ways (Melee / Skill / Spell / Song / DS / Pet), your pet tracked as its own
