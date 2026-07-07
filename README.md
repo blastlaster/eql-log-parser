@@ -23,19 +23,6 @@ level, class combo, race, zone, and AFK detection. Non-friend `/who`
 searches never pollute the roster and can pop up in their own window.
 Per-character rosters persist between sessions.
 
-In order to get this working, you will need to follow some simple steps:
-1) On any chat window, create a new tab.
-2) Send all "/who" messages and "other" messages to this window
-3) To minimize annoyance, set not to highlight new messages.
-4) Press "L" and go to Socials
-5) Create a new macro with these settings: /friend | /who friend all | /pet who leader .
-7) Add this button to the last slot of your main hotbar (you can use another button, this is just my preference and what the guide will use).
-8) Press Alt+O to open Settings, then navigate to Controls > Hotbar 1 > Button 12 (or whatever button you place this).
-9) Change button 12 to match one of your movement keys (I use right: D).
-10) Doing this causes the macro to fire into the hidden chat channel every time you press that button.
-11) To update friends list details, press that direction.
-The tool will also display /who results in a separate window; right click on the main element and give it a try!
-
 **DPS/HPS Meter** (`eql_dps_meter.py`) — retro live combat meter: DPS, HPS,
 DTPS with melee/spell/song/damage-shield splits, damage sources split six
 ways (Melee / Skill / Spell / Song / DS / Pet), your pet tracked as its own
@@ -64,6 +51,28 @@ CRT Terminal, Arcade LED, 16-bit Window, Vintage (text-only rows), and
 **Neon HUD** — a fully transparent mode where black-outlined neon text
 floats directly over the game (Windows). The Friends overlay shares all of
 them, plus its original Classic Slate look.
+
+## In-game setup (Friends Overlay)
+
+The Friends Overlay reads `/who` and friend-list output from the game's log,
+so it needs a dedicated chat tab plus a macro/hotkey that refreshes that data
+for you automatically.
+
+1. Open any chat window and create a new tab.
+2. Route all `/who` messages and "Other" messages to that tab.
+3. Turn off highlighting on new messages for that tab, so it doesn't flash/alert.
+4. Press `L` to open Socials.
+5. Create a new macro: `/friend | /who friend all | /pet who leader`.
+6. Place the macro in the last slot of your main hotbar (slot 12) — any slot
+   works, this is just what the rest of these steps assume.
+7. Press `Alt+O` to open Settings, then go to Controls > Hotbar 1 > Button 12
+   (or whichever slot you used).
+8. Rebind that button to one of your movement keys (e.g. Right / D).
+9. Pressing that movement key now also fires the macro into the hidden chat
+   tab, refreshing friend/pet data every time you move that direction.
+10. Press that direction any time you want to update the friends list.
+    `/who` results also pop up in their own window — right-click the main
+    overlay element and give it a try.
 
 ## Running
 
