@@ -43,21 +43,53 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
-from eql_overlay_common import Settings
+from eql_overlay_common import Settings, RETRO_THEMES, DEFAULT_THEME, get_theme
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+# The launcher is a normal decorated window, not a borderless overlay, so the
+# transparent (chroma-key) Neon HUD theme -- meant to float over the game --
+# isn't offered here. Same reasoning as the Session Report's theme picker.
+LAUNCHER_THEMES = {k: v for k, v in RETRO_THEMES.items()
+                    if not v.get("transparent")}
+
+
+def _launcher_theme_key(key):
+    """Clamp a saved theme key to one the launcher can actually use."""
+    return key if key in LAUNCHER_THEMES else DEFAULT_THEME
+
+
+if getattr(sys, "frozen", False):
+    # Packaged (PyInstaller) exe: __file__ points into the temp extraction
+    # dir, not the real install location. Use the exe's own directory so
+    # settings/rosters persist next to where the user put the program.
+    APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_FILE = os.path.join(APP_DIR, "eql_launcher_settings.json")
 DEFAULT_INSTALL_DIR = r"C:\Users\Public\Daybreak Game Company\Installed Games"
 
 TOOLS = [
     {"name": "Friends Overlay", "script": "eql_friend_overlay.py",
+     "exe": "eql_friend_overlay.exe",
      "desc": "Shows which friends are online, with level/class/zone."},
     {"name": "DPS/HPS Meter", "script": "eql_dps_meter.py",
+     "exe": "eql_dps_meter.exe",
      "desc": "Retro live combat meter -- damage, healing, kill rate."},
     {"name": "Session Report", "script": "eql_session_report.py",
+     "exe": "eql_session_report.exe",
      "desc": "Detailed breakdown: damage/heal by ability, stance/invocation "
              "comparison, spells cast."},
 ]
+
+# These two are always-on, live overlays meant to track whichever character
+# is currently active -- each is launched with the log path fixed as a
+# command-line argument, so a running instance keeps watching the OLD
+# character's log until it's restarted. Auto-restart them (with the new log
+# path) whenever the active character changes, so switching characters "just
+# works" instead of requiring a manual close/reopen. Session Report is a
+# read-once deep-dive the player opens per session (with its own "Change
+# log..." button and several tabs of state) -- restarting it out from under
+# them would lose their place, so it's deliberately left alone here.
+AUTO_RESTART_TOOLS = {"Friends Overlay", "DPS/HPS Meter"}
 
 _EQLOG_NAME_RE = re.compile(r"^eqlog_([A-Za-z0-9]+)_([A-Za-z0-9]+)\.txt$", re.IGNORECASE)
 
@@ -93,34 +125,54 @@ def discover_characters():
     return found
 
 
-class ToolRow:
-    """One tool's row: name/desc, status, and a Start/Stop toggle button."""
+def _mix(c1, c2, t):
+    """Blend two '#rrggbb' colors: t=0 -> c1, t=1 -> c2. Derives the
+    launcher-only tones (row backgrounds) the compact themes don't define."""
+    a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(c2[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#%02x%02x%02x" % tuple(round(x + (y - x) * t) for x, y in zip(a, b))
 
-    def __init__(self, parent, spec, get_log_path):
+
+class ToolRow:
+    """One tool's row: name/desc, status, and a Start/Stop toggle button.
+
+    The subprocess handle lives in the shared `procs` dict (keyed by tool
+    name) rather than on the row itself, so picking a new theme can rebuild
+    the whole UI without the launcher losing track of overlays that are
+    already running."""
+
+    def __init__(self, parent, spec, get_log_path, procs, pal):
         self.spec = spec
         self.get_log_path = get_log_path
-        self.proc = None
+        self.procs = procs
+        self.pal = pal
 
-        self.frame = tk.Frame(parent, bg="#161c22", padx=10, pady=8)
+        P = pal
+        self.frame = tk.Frame(parent, bg=P["panel"], padx=10, pady=8)
         self.frame.pack(fill="x", padx=10, pady=4)
 
-        left = tk.Frame(self.frame, bg="#161c22")
+        left = tk.Frame(self.frame, bg=P["panel"])
         left.pack(side="left", fill="x", expand=True)
-        tk.Label(left, text=spec["name"], font=("Segoe UI", 11, "bold"),
-                 bg="#161c22", fg="#d8dee6", anchor="w").pack(fill="x")
-        tk.Label(left, text=spec["desc"], font=("Segoe UI", 8),
-                 bg="#161c22", fg="#8a94a3", anchor="w").pack(fill="x")
+        tk.Label(left, text=spec["name"], font=(P["font"], 11, "bold"),
+                 bg=P["panel"], fg=P["fg"], anchor="w").pack(fill="x")
+        tk.Label(left, text=spec["desc"], font=(P["font"], 8),
+                 bg=P["panel"], fg=P["dim"], anchor="w").pack(fill="x")
 
-        right = tk.Frame(self.frame, bg="#161c22")
+        right = tk.Frame(self.frame, bg=P["panel"])
         right.pack(side="right")
-        self.status_lbl = tk.Label(right, text="○ stopped", font=("Segoe UI", 9),
-                                    bg="#161c22", fg="#5c6773", width=12, anchor="e")
+        self.status_lbl = tk.Label(right, text="○ stopped", font=(P["font"], 9),
+                                    bg=P["panel"], fg=P["dim"], width=12, anchor="e")
         self.status_lbl.pack(side="left", padx=(0, 10))
-        self.btn = tk.Button(right, text="Start", width=8, command=self.toggle)
+        self.btn = P["button"](right, text="Start", width=8, command=self.toggle)
         self.btn.pack(side="left")
+        self.refresh()
+
+    def _proc(self):
+        return self.procs.get(self.spec["name"])
 
     def running(self):
-        return self.proc is not None and self.proc.poll() is None
+        p = self._proc()
+        return p is not None and p.poll() is None
 
     def toggle(self):
         if self.running():
@@ -135,30 +187,37 @@ class ToolRow:
                 "No character selected",
                 "Pick a character first (Auto-detect or Browse, top of the launcher).")
             return
-        script = os.path.join(APP_DIR, self.spec["script"])
         try:
-            self.proc = subprocess.Popen([sys.executable, script, log_path],
-                                         cwd=APP_DIR)
+            if getattr(sys, "frozen", False):
+                # Packaged build: sys.executable is this exe, not a python
+                # interpreter, so launch the sibling tool exe directly.
+                target = os.path.join(APP_DIR, self.spec["exe"])
+                self.procs[self.spec["name"]] = subprocess.Popen(
+                    [target, log_path], cwd=APP_DIR)
+            else:
+                script = os.path.join(APP_DIR, self.spec["script"])
+                self.procs[self.spec["name"]] = subprocess.Popen(
+                    [sys.executable, script, log_path], cwd=APP_DIR)
         except OSError as e:
             messagebox.showerror("Couldn't start", f"{self.spec['name']}: {e}")
-            self.proc = None
+            self.procs.pop(self.spec["name"], None)
         self.refresh()
 
     def stop(self):
         if self.running():
             try:
-                self.proc.terminate()
+                self._proc().terminate()
             except OSError:
                 pass
         self.refresh()
 
     def refresh(self):
         if self.running():
-            self.status_lbl.config(text="● running", fg="#57d977")
+            self.status_lbl.config(text="● running", fg=self.pal["good"])
             self.btn.config(text="Stop")
         else:
-            self.proc = None
-            self.status_lbl.config(text="○ stopped", fg="#5c6773")
+            self.procs.pop(self.spec["name"], None)
+            self.status_lbl.config(text="○ stopped", fg=self.pal["dim"])
             self.btn.config(text="Start")
 
 
@@ -166,191 +225,261 @@ def main():
     settings = Settings(SETTINGS_FILE, {
         "log_path": "", "active_character_id": "", "inventory_path": "",
         "hidden_characters": [],
+        "theme": DEFAULT_THEME,   # shared suite theme set (16-bit Window)
     })
 
     root = tk.Tk()
     root.title("EQL Log Reader -- Launcher")
-    root.configure(bg="#101418")
     root.resizable(False, False)
 
-    BG, PANEL, FG, DIM, ACCENT = "#101418", "#161c22", "#d8dee6", "#5c6773", "#8fbf6f"
-    ROW_BG, ROW_BG_ACTIVE = "#1b222a", "#20301f"
+    procs = {}                       # tool name -> Popen; survives re-themes
+    ui = {"after": None}             # pending poll callback, cancelled on rebuild
 
-    header = tk.Frame(root, bg=BG, padx=12, pady=10)
-    header.pack(fill="x")
-    tk.Label(header, text="EQL LOG READER", font=("Segoe UI", 12, "bold"),
-             bg=BG, fg=ACCENT).pack(anchor="w")
+    def build_ui():
+        """(Re)build the whole launcher UI in the current theme. Called once
+        at startup and again whenever a new theme is picked -- widgets bake
+        their colors in at creation, so a clean rebuild is simplest. Running
+        overlays are unaffected (their handles live in `procs`)."""
+        if ui["after"] is not None:
+            root.after_cancel(ui["after"])
+            ui["after"] = None
+        for w in list(root.children.values()):
+            w.destroy()
 
-    # -- active character / log file summary ------------------------------------
-    log_frame = tk.Frame(root, bg=PANEL, padx=10, pady=8)
-    log_frame.pack(fill="x", padx=10, pady=(0, 6))
-    tk.Label(log_frame, text="Active character", font=("Segoe UI", 9, "bold"),
-             bg=PANEL, fg=DIM).pack(anchor="w")
-    path_lbl = tk.Label(log_frame, text="(none selected)", font=("Segoe UI", 9),
-                        bg=PANEL, fg=FG, anchor="w", justify="left", wraplength=380)
-    path_lbl.pack(anchor="w", fill="x", pady=(2, 6))
+        th = get_theme(_launcher_theme_key(settings.get("theme", DEFAULT_THEME)))
+        BG, PANEL, FG, DIM, ACCENT = (th["bg"], th["panel"], th["fg"],
+                                      th["dim"], th["accent"])
+        GOOD = th["alt"]
+        ROW_BG = _mix(PANEL, FG, 0.06)
+        ROW_BG_ACTIVE = _mix(PANEL, ACCENT, 0.22)
+        FAM = th["font_mono"][0]
 
-    def active_label_text():
-        cid = settings.get("active_character_id", "")
-        p = settings.get("log_path", "")
-        if not p:
-            return "(none selected)"
-        if cid and "_" in cid:
-            name, server = cid.split("_", 1)
-            inv = " -- inventory found" if settings.get("inventory_path") else ""
-            return f"{name}  ({server}){inv}\n{p}"
-        return p
+        def button(parent, **kw):
+            kw.setdefault("font", (FAM, 8))
+            return tk.Button(parent, bg=PANEL, fg=FG, activebackground=ACCENT,
+                             activeforeground=BG, relief="flat", **kw)
 
-    def refresh_path_label():
-        path_lbl.config(text=active_label_text())
+        pal = {"bg": BG, "panel": PANEL, "fg": FG, "dim": DIM,
+               "accent": ACCENT, "good": GOOD, "font": FAM, "button": button}
 
-    def get_log_path():
-        return settings.get("log_path", "")
+        root.configure(bg=BG)
 
-    def browse_log():
-        initialdir = os.path.dirname(settings.get("log_path", "")) or DEFAULT_INSTALL_DIR
-        if not os.path.isdir(initialdir):
-            initialdir = None
-        chosen = filedialog.askopenfilename(
-            title="Select your EverQuest log file (eqlog_*.txt)",
-            initialdir=initialdir,
-            filetypes=[("EQ log files", "eqlog_*.txt"),
-                       ("Text files", "*.txt"), ("All files", "*.*")])
-        if chosen and os.path.isfile(chosen):
-            settings["log_path"] = chosen
-            settings["active_character_id"] = ""
-            settings["inventory_path"] = ""
+        header = tk.Frame(root, bg=BG, padx=12, pady=10)
+        header.pack(fill="x")
+        tk.Label(header, text="EQL LOG READER", font=(FAM, 12, "bold"),
+                 bg=BG, fg=ACCENT).pack(side="left")
+
+        # theme picker: same theme set as every other applet in the suite
+        def pick_theme(k):
+            settings["theme"] = k
+            settings.save()
+            build_ui()
+
+        theme_btn = tk.Menubutton(header, text="Theme ▾", font=(FAM, 8),
+                                  bg=PANEL, fg=FG, activebackground=ACCENT,
+                                  activeforeground=BG, relief="flat", padx=8)
+        theme_menu = tk.Menu(theme_btn, tearoff=0)
+        cur = _launcher_theme_key(settings.get("theme", DEFAULT_THEME))
+        for key, spec in LAUNCHER_THEMES.items():
+            mark = "● " if key == cur else "   "
+            theme_menu.add_command(label=mark + spec["label"],
+                                   command=lambda k=key: pick_theme(k))
+        theme_btn.configure(menu=theme_menu)
+        theme_btn.pack(side="right")
+
+        # -- active character / log file summary --------------------------------
+        log_frame = tk.Frame(root, bg=PANEL, padx=10, pady=8)
+        log_frame.pack(fill="x", padx=10, pady=(0, 6))
+        tk.Label(log_frame, text="Active character", font=(FAM, 9, "bold"),
+                 bg=PANEL, fg=DIM).pack(anchor="w")
+        path_lbl = tk.Label(log_frame, text="(none selected)", font=(FAM, 9),
+                            bg=PANEL, fg=FG, anchor="w", justify="left",
+                            wraplength=380)
+        path_lbl.pack(anchor="w", fill="x", pady=(2, 6))
+
+        def active_label_text():
+            cid = settings.get("active_character_id", "")
+            p = settings.get("log_path", "")
+            if not p:
+                return "(none selected)"
+            if cid and "_" in cid:
+                name, server = cid.split("_", 1)
+                inv = " -- inventory found" if settings.get("inventory_path") else ""
+                return f"{name}  ({server}){inv}\n{p}"
+            return p
+
+        def refresh_path_label():
+            path_lbl.config(text=active_label_text())
+
+        def get_log_path():
+            return settings.get("log_path", "")
+
+        def browse_log():
+            initialdir = os.path.dirname(settings.get("log_path", "")) or DEFAULT_INSTALL_DIR
+            if not os.path.isdir(initialdir):
+                initialdir = None
+            chosen = filedialog.askopenfilename(
+                title="Select your EverQuest log file (eqlog_*.txt)",
+                initialdir=initialdir,
+                filetypes=[("EQ log files", "eqlog_*.txt"),
+                           ("Text files", "*.txt"), ("All files", "*.*")])
+            if chosen and os.path.isfile(chosen):
+                settings["log_path"] = chosen
+                settings["active_character_id"] = ""
+                settings["inventory_path"] = ""
+                settings.save()
+                refresh_path_label()
+                rebuild_roster()
+                restart_running_tools()
+
+        btn_row = tk.Frame(log_frame, bg=PANEL)
+        btn_row.pack(anchor="w")
+        button(btn_row, text="Browse...", command=browse_log,
+               font=(FAM, 9)).pack(side="left")
+        refresh_path_label()
+
+        # -- character roster ----------------------------------------------------
+        chars_frame = tk.Frame(root, bg=PANEL, padx=10, pady=8)
+        chars_frame.pack(fill="x", padx=10, pady=(0, 6))
+
+        chars_header = tk.Frame(chars_frame, bg=PANEL)
+        chars_header.pack(fill="x")
+        tk.Label(chars_header, text="Characters", font=(FAM, 9, "bold"),
+                 bg=PANEL, fg=DIM).pack(side="left")
+        hidden_btn = button(chars_header, text="Hidden (0)")
+        hidden_btn.pack(side="right")
+        auto_btn = button(chars_header, text="Auto-detect", font=(FAM, 9))
+        auto_btn.pack(side="right", padx=(0, 6))
+
+        roster_list = tk.Frame(chars_frame, bg=PANEL)
+        roster_list.pack(fill="x", pady=(6, 0))
+
+        def select_character(entry):
+            settings["log_path"] = entry["log_path"]
+            settings["active_character_id"] = entry["id"]
+            settings["inventory_path"] = entry.get("inventory_path") or ""
             settings.save()
             refresh_path_label()
             rebuild_roster()
+            restart_running_tools()
 
-    btn_row = tk.Frame(log_frame, bg=PANEL)
-    btn_row.pack(anchor="w")
-    tk.Button(btn_row, text="Browse...", command=browse_log).pack(side="left")
-    refresh_path_label()
+        def restart_running_tools():
+            """Seamlessly bounce any live overlay so it picks up the log
+            path just set above, instead of continuing to watch the
+            character you switched away from. `rows` is defined further
+            down in build_ui(); by the time a button click can actually
+            reach this closure the whole UI (rows included) already
+            exists, so the late-bound lookup is safe."""
+            for row in rows:
+                if row.spec["name"] in AUTO_RESTART_TOOLS and row.running():
+                    row.stop()
+                    row.start()
 
-    # -- character roster ------------------------------------------------------
-    chars_frame = tk.Frame(root, bg=PANEL, padx=10, pady=8)
-    chars_frame.pack(fill="x", padx=10, pady=(0, 6))
+        def hide_character(cid):
+            hidden = set(settings.get("hidden_characters", []))
+            hidden.add(cid)
+            settings["hidden_characters"] = sorted(hidden)
+            settings.save()
+            rebuild_roster()
 
-    chars_header = tk.Frame(chars_frame, bg=PANEL)
-    chars_header.pack(fill="x")
-    tk.Label(chars_header, text="Characters", font=("Segoe UI", 9, "bold"),
-             bg=PANEL, fg=DIM).pack(side="left")
-    hidden_btn = tk.Button(chars_header, text="Hidden (0)", font=("Segoe UI", 8))
-    hidden_btn.pack(side="right")
-    auto_btn = tk.Button(chars_header, text="Auto-detect")
-    auto_btn.pack(side="right", padx=(0, 6))
+        def unhide_character(cid):
+            hidden = set(settings.get("hidden_characters", []))
+            hidden.discard(cid)
+            settings["hidden_characters"] = sorted(hidden)
+            settings.save()
+            rebuild_roster()
+            open_hidden_manager()  # refresh the dialog in place
 
-    roster_list = tk.Frame(chars_frame, bg=PANEL)
-    roster_list.pack(fill="x", pady=(6, 0))
+        def open_hidden_manager():
+            for w in list(root.children.values()):
+                if getattr(w, "_is_hidden_manager", False):
+                    w.destroy()
+            hidden = sorted(settings.get("hidden_characters", []))
+            win = tk.Toplevel(root)
+            win._is_hidden_manager = True
+            win.title("Hidden characters")
+            win.configure(bg=PANEL)
+            win.resizable(False, False)
+            if not hidden:
+                tk.Label(win, text="No hidden characters.", bg=PANEL, fg=DIM,
+                         font=(FAM, 9), padx=16, pady=16).pack()
+                return
+            for cid in hidden:
+                name, _, server = cid.partition("_")
+                row = tk.Frame(win, bg=PANEL, padx=10, pady=4)
+                row.pack(fill="x")
+                tk.Label(row, text=f"{name}  ({server})", bg=PANEL, fg=FG,
+                         font=(FAM, 9), anchor="w").pack(side="left", fill="x",
+                                                         expand=True)
+                button(row, text="Unhide",
+                       command=lambda c=cid: unhide_character(c)
+                       ).pack(side="right")
 
-    def select_character(entry):
-        settings["log_path"] = entry["log_path"]
-        settings["active_character_id"] = entry["id"]
-        settings["inventory_path"] = entry.get("inventory_path") or ""
-        settings.save()
-        refresh_path_label()
-        rebuild_roster()
+        hidden_btn.config(command=open_hidden_manager)
 
-    def hide_character(cid):
-        hidden = set(settings.get("hidden_characters", []))
-        hidden.add(cid)
-        settings["hidden_characters"] = sorted(hidden)
-        settings.save()
-        rebuild_roster()
-
-    def unhide_character(cid):
-        hidden = set(settings.get("hidden_characters", []))
-        hidden.discard(cid)
-        settings["hidden_characters"] = sorted(hidden)
-        settings.save()
-        rebuild_roster()
-        open_hidden_manager()  # refresh the dialog in place
-
-    def open_hidden_manager():
-        for w in list(root.children.values()):
-            if getattr(w, "_is_hidden_manager", False):
+        def rebuild_roster():
+            for w in roster_list.winfo_children():
                 w.destroy()
-        hidden = sorted(settings.get("hidden_characters", []))
-        win = tk.Toplevel(root)
-        win._is_hidden_manager = True
-        win.title("Hidden characters")
-        win.configure(bg=PANEL)
-        win.resizable(False, False)
-        if not hidden:
-            tk.Label(win, text="No hidden characters.", bg=PANEL, fg=DIM,
-                     padx=16, pady=16).pack()
-            return
-        for cid in hidden:
-            name, _, server = cid.partition("_")
-            row = tk.Frame(win, bg=PANEL, padx=10, pady=4)
-            row.pack(fill="x")
-            tk.Label(row, text=f"{name}  ({server})", bg=PANEL, fg=FG,
-                     anchor="w").pack(side="left", fill="x", expand=True)
-            tk.Button(row, text="Unhide", command=lambda c=cid: unhide_character(c)
-                     ).pack(side="right")
+            found = discover_characters()
+            hidden = set(settings.get("hidden_characters", []))
+            hidden_btn.config(text=f"Hidden ({len(hidden)})")
+            active_cid = settings.get("active_character_id", "")
+            visible = sorted((c for c in found.values() if c["id"] not in hidden),
+                             key=lambda c: (c["name"].lower(), c["server"].lower()))
+            if not visible:
+                tk.Label(roster_list, text="No characters found. Click Auto-detect, "
+                                           "or use Browse... to pick a log file manually.",
+                         bg=PANEL, fg=DIM, font=(FAM, 8), wraplength=380,
+                         justify="left").pack(anchor="w")
+                return
+            for entry in visible:
+                is_active = entry["id"] == active_cid
+                row = tk.Frame(roster_list,
+                               bg=ROW_BG_ACTIVE if is_active else ROW_BG,
+                               padx=8, pady=5)
+                row.pack(fill="x", pady=2)
+                label_text = f"{'● ' if is_active else ''}{entry['name']}  ({entry['server']})"
+                if entry.get("inventory_path"):
+                    label_text += "   🎒"
+                tk.Label(row, text=label_text, bg=row["bg"],
+                         fg=ACCENT if is_active else FG, anchor="w",
+                         font=(FAM, 9, "bold" if is_active else "normal")
+                         ).pack(side="left", fill="x", expand=True)
+                button(row, text="Hide",
+                       command=lambda c=entry["id"]: hide_character(c)
+                       ).pack(side="right")
+                button(row, text="Select", width=7,
+                       command=lambda e=entry: select_character(e)
+                       ).pack(side="right", padx=(0, 4))
 
-    hidden_btn.config(command=open_hidden_manager)
+        def auto_detect():
+            rebuild_roster()
 
-    def rebuild_roster():
-        for w in roster_list.winfo_children():
-            w.destroy()
-        found = discover_characters()
-        hidden = set(settings.get("hidden_characters", []))
-        hidden_btn.config(text=f"Hidden ({len(hidden)})")
-        active_cid = settings.get("active_character_id", "")
-        visible = sorted((c for c in found.values() if c["id"] not in hidden),
-                         key=lambda c: (c["name"].lower(), c["server"].lower()))
-        if not visible:
-            tk.Label(roster_list, text="No characters found. Click Auto-detect, "
-                                       "or use Browse... to pick a log file manually.",
-                     bg=PANEL, fg=DIM, font=("Segoe UI", 8), wraplength=380,
-                     justify="left").pack(anchor="w")
-            return
-        for entry in visible:
-            is_active = entry["id"] == active_cid
-            row = tk.Frame(roster_list, bg=ROW_BG_ACTIVE if is_active else ROW_BG,
-                           padx=8, pady=5)
-            row.pack(fill="x", pady=2)
-            label_text = f"{'● ' if is_active else ''}{entry['name']}  ({entry['server']})"
-            if entry.get("inventory_path"):
-                label_text += "   🎒"
-            tk.Label(row, text=label_text, bg=row["bg"],
-                     fg=ACCENT if is_active else FG, anchor="w",
-                     font=("Segoe UI", 9, "bold" if is_active else "normal")
-                     ).pack(side="left", fill="x", expand=True)
-            tk.Button(row, text="Hide", font=("Segoe UI", 8),
-                     command=lambda c=entry["id"]: hide_character(c)).pack(side="right")
-            tk.Button(row, text="Select", font=("Segoe UI", 8), width=7,
-                     command=lambda e=entry: select_character(e)
-                     ).pack(side="right", padx=(0, 4))
+        auto_btn.config(command=auto_detect)
 
-    def auto_detect():
         rebuild_roster()
 
-    auto_btn.config(command=auto_detect)
+        # -- tool rows ---------------------------------------------------------
+        tools_frame = tk.Frame(root, bg=BG)
+        tools_frame.pack(fill="x")
+        rows = [ToolRow(tools_frame, spec, get_log_path, procs, pal)
+                for spec in TOOLS]
 
-    rebuild_roster()
+        footer = tk.Label(
+            root,
+            text="eql_overlay_common.py, eql_combat_tracker.py, and eql_spell_db.py are\n"
+                 "shared code used by the tools above -- nothing to start/stop for those.",
+            font=(FAM, 8), bg=BG, fg=DIM, justify="left")
+        footer.pack(anchor="w", padx=12, pady=(4, 10))
 
-    # -- tool rows -----------------------------------------------------------
-    tools_frame = tk.Frame(root, bg=BG)
-    tools_frame.pack(fill="x")
-    rows = [ToolRow(tools_frame, spec, get_log_path) for spec in TOOLS]
+        def poll_status():
+            for row in rows:
+                row.refresh()
+            ui["after"] = root.after(1000, poll_status)
 
-    footer = tk.Label(
-        root,
-        text="eql_overlay_common.py, eql_combat_tracker.py, and eql_spell_db.py are\n"
-             "shared code used by the tools above -- nothing to start/stop for those.",
-        font=("Segoe UI", 8), bg=BG, fg=DIM, justify="left")
-    footer.pack(anchor="w", padx=12, pady=(4, 10))
+        poll_status()
 
-    def poll_status():
-        for row in rows:
-            row.refresh()
-        root.after(1000, poll_status)
-
-    poll_status()
+    build_ui()
     root.mainloop()
 
 

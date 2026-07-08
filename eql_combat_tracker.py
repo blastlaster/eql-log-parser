@@ -229,6 +229,20 @@ SELF_HIT_RE = re.compile(
     TS_RE + r"You (?P<verb>[a-z]+) (?P<target>.+?) for (?P<amount>\d+) points? of "
             r"(?:(?P<element>[a-z]+) )?damage(?: by (?P<spell>.+?))?\.?\s*$")
 
+# -- life-tap style combo spells: deal damage AND heal the caster for the
+# same amount. Confirmed against a real log: when someone ELSE casts one of
+# these on themselves, both halves print ("Gobn hit a crab spiderling for 4
+# points of magic damage by Lifetap." followed by "Gobn healed itself for 0
+# (4) hit points by Lifetap." -- the parenthesized number is the spell's
+# fixed heal magnitude, always equal to its damage). For YOUR OWN casts,
+# though, only the damage line ever appears in the log -- zero "You healed
+# ... Lifetap" lines exist even though "You hit ... Lifetap" appears
+# repeatedly. _maybe_record_lifetap_heal() synthesizes the missing self-heal
+# 1:1 with the damage actually logged, so these spells show up as healing
+# instead of silently vanishing.
+LIFETAP_SPELLS = {"lifetap", "lifespike", "lifedraw", "siphon life",
+                  "spirit tap"}
+
 # -- self as target ------------------------------------------------------------
 # Melee uses uppercase YOU ("An orc warrior cleaves YOU for 19 points of
 # damage."); spell/elemental hits use lowercase you and name the spell
@@ -817,6 +831,14 @@ class CombatTracker:
             self.heal_in_total += amount
         self._notify()
 
+    def _maybe_record_lifetap_heal(self, wall_time, ability, amount):
+        """See LIFETAP_SPELLS: your own casts of these log the damage half
+        but never the heal half, unlike everyone else's. Synthesize the
+        missing self-heal 1:1 with the damage that WAS logged."""
+        if ability and ability.lower() in LIFETAP_SPELLS:
+            self._record_heal(wall_time, YOU_LABEL, YOU_LABEL, amount,
+                              ability=ability)
+
     def _notify(self):
         if self.on_change:
             self.on_change()
@@ -937,6 +959,8 @@ class CombatTracker:
             self._record_damage(wall_time, YOU_LABEL, m.group("target"),
                                 int(m.group("amount")), crit=crit,
                                 category=category, ability=ability)
+            self._maybe_record_lifetap_heal(wall_time, ability,
+                                            int(m.group("amount")))
             return
 
         m = SELF_TAKEN_RE.match(line)
@@ -980,6 +1004,8 @@ class CombatTracker:
                 if self._n(source) == YOU_LABEL else "spell"
             self._record_damage(wall_time, source, target, amount, crit=crit,
                                 category=cat, ability=spell)
+            if self._n(source) == YOU_LABEL:
+                self._maybe_record_lifetap_heal(wall_time, spell, amount)
             return
 
         m = PROC_DOT_RE.match(line)
@@ -999,6 +1025,8 @@ class CombatTracker:
                                     int(m.group("amount")),
                                     category=self._spell_category(m.group("spell")),
                                     ability=m.group("spell"))
+                self._maybe_record_lifetap_heal(wall_time, m.group("spell"),
+                                                int(m.group("amount")))
             return
 
         # -- third-party combat: only your own pet matters; everything else

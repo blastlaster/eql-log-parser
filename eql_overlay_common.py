@@ -242,4 +242,11 @@ RETRO_THEMES = {
     },
 }
 
-DEFAULT_THEME = "crt"
+DEFAULT_THEME = "pixel"      # "16-bit Window" -- the suite-wide default
+
+
+def get_theme(key):
+    """Resolve a saved theme key to its theme dict, falling back to the
+    default for unknown/retired keys (e.g. a settings file written by an
+    older version that still says "classic")."""
+    return RETRO_THEMES.get(key, RETRO_THEMES[DEFAULT_THEME])

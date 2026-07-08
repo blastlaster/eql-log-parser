@@ -1,0 +1,15 @@
+# personal data -- created at runtime next to the scripts
+eql_*_settings.json
+eql_friend_overlay_roster*.json
+eql_session_report_records_*.json
+eql_alltime_*.json
+
+# python
+__pycache__/
+*.pyc
+
+# packaging build artifacts (see BUILDING.md)
+.buildenv/
+build/
+dist/
+Output/

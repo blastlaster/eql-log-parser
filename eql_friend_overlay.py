@@ -32,9 +32,9 @@ Optionally, /who search results can pop up in their own closable window
 Everyone ever seen stays in the roster (persisted to a JSON file next to this
 script), so offline friends remain listed by name. Right-click a friend to
 remove them from the roster; right-click the overlay for options -- including
-Theme: the overlay's original "Classic Slate" look (default) plus every DPS
-meter theme (CRT Terminal, Arcade LED, 16-bit Window, Vintage, and the
-transparent Neon HUD, which floats bare neon text over the game). The friend
+Theme: the suite's shared theme set (16-bit Window by default, plus CRT
+Terminal, Arcade LED, Vintage, and the transparent Neon HUD, which floats
+bare neon text over the game -- identical across every applet). The friend
 list and the /who window render on canvases, so Neon HUD text carries the
 same black outline as the DPS meter and stays readable over bright footage.
 
@@ -52,7 +52,7 @@ import sys
 import time
 from datetime import datetime
 
-from eql_overlay_common import RETRO_THEMES, luma
+from eql_overlay_common import RETRO_THEMES, DEFAULT_THEME, get_theme, luma
 
 # ----------------------------------------------------------------------------
 # Configuration defaults (all UI-tunable settings persist to SETTINGS_FILE)
@@ -61,28 +61,23 @@ MISS_THRESHOLD = 3          # snapshots a friend can miss before marked offline
 POLL_INTERVAL_MS = 250      # how often to check the log for new lines
 SEED_BYTES = 512 * 1024     # how much of the log tail to parse on startup
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):
+    APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_FILE = os.path.join(APP_DIR, "eql_friend_overlay_settings.json")
 LEGACY_ROSTER_FILE = os.path.join(APP_DIR, "eql_friend_overlay_roster.json")
 
 # ----------------------------------------------------------------------------
-# Themes: this overlay's original palette ("Classic Slate", still the
-# default) plus every theme the DPS meter offers (shared RETRO_THEMES,
-# including the transparent Neon HUD). Retro themes derive their status-dot
-# colors from theme roles -- online=accent, offline=dim, afk=warn -- and use
-# the theme's mono font; Classic pins its original dots and Segoe UI.
+# Themes: the shared suite theme set (RETRO_THEMES in eql_overlay_common),
+# identical across every applet, defaulting to "16-bit Window". Status-dot
+# colors derive from theme roles -- online=accent, offline=dim, afk=warn --
+# and rows use the theme's mono font. (The overlay's original "Classic
+# Slate" palette was retired when the suite standardized on one theme set;
+# get_theme() maps any old saved "classic" key to the default.)
 # ----------------------------------------------------------------------------
-CLASSIC_THEME = {
-    "label": "Classic Slate",
-    "bg": "#101418", "panel": "#161c22",
-    "fg": "#d8dee6", "dim": "#5c6773", "accent": "#8fbf6f",
-    "warn": "#e6c84f", "bad": "#ff6b6b", "alt": "#57d977",
-    "online_dot": "#57d977", "offline_dot": "#4a5560", "afk_dot": "#e6c84f",
-    "font_ui": "Segoe UI",
-    "glow": False,
-}
-FRIEND_THEMES = {"classic": CLASSIC_THEME, **RETRO_THEMES}
-DEFAULT_FRIEND_THEME = "classic"
+FRIEND_THEMES = RETRO_THEMES
+DEFAULT_FRIEND_THEME = DEFAULT_THEME
 
 
 def roster_path_for(log_path):
@@ -534,8 +529,7 @@ def run_overlay(log_path):
         return int(v * settings.get("scale", 1.0))
 
     def current_theme():
-        return FRIEND_THEMES.get(settings.get("theme", DEFAULT_FRIEND_THEME),
-                                 CLASSIC_THEME)
+        return get_theme(settings.get("theme", DEFAULT_FRIEND_THEME))
 
     def outlined_text(cnv, x, y, **kw):
         """cnv.create_text that honors the theme's "outline" color (Neon

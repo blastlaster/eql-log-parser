@@ -63,8 +63,12 @@ that contribution is to compute what the spell's own data says it should do.
 """
 
 import os
+import sys
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):
+    APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Validated field indices (columns 0-51), cross-confirmed against
 # github.com/Amerzel/eql-info's SPELL_FORMAT.md.

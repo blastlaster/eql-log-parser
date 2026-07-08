@@ -47,10 +47,13 @@ tailing, settings, themes), `eql_combat_tracker.py` (the combat parser),
 
 ## Themes
 
-CRT Terminal, Arcade LED, 16-bit Window, Vintage (text-only rows), and
+One shared theme set across all four applets: **16-bit Window** (the
+default), CRT Terminal, Arcade LED, Vintage (text-only rows), and
 **Neon HUD** — a fully transparent mode where black-outlined neon text
-floats directly over the game (Windows). The Friends overlay shares all of
-them, plus its original Classic Slate look.
+floats directly over the game (Windows; the report and launcher render it
+as a plain dark palette). Pick a theme from each applet's right-click menu
+(overlays), the Theme dropdown (Session Report), or the Theme button
+(Launcher).
 
 ## In-game setup (Friends Overlay)
 

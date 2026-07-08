@@ -16,7 +16,8 @@ Or run with no arguments to pick the log file from a dialog, or launch it
 from the Friends overlay's right-click menu ("Open DPS/HPS meter").
 
 Right-click the overlay for:
-  * Theme       -- CRT Terminal / Arcade LED / 16-bit Window / Vintage /
+  * Theme       -- the suite's shared theme set (16-bit Window by default):
+                   16-bit Window / CRT Terminal / Arcade LED / Vintage /
                    Neon HUD (transparent: no background at all -- neon
                    pink/orange/yellow/blue/green text and bars float
                    directly over the game, every text black-outlined so
@@ -114,6 +115,7 @@ import time
 
 from eql_overlay_common import (
     LogWatcher, Settings, make_draggable, RETRO_THEMES, DEFAULT_THEME,
+    get_theme,
     POLL_INTERVAL_MS, luma as _luma,
 )
 from eql_combat_tracker import CombatTracker, YOU_LABEL, PET_LABEL
@@ -129,7 +131,10 @@ CANVAS_HEIGHT_V = 292
 CANVAS_WIDTH_H = 620
 CANVAS_HEIGHT_H = 128   # includes the ALL TIME bottom row
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):
+    APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_FILE = os.path.join(APP_DIR, "eql_dps_meter_settings.json")
 
 # Damage-source segment display order/colors are keyed to theme roles shared
@@ -353,7 +358,7 @@ def run_overlay(log_path):
         key = (settings["theme"], size, weight)
         f = _font_cache.get(key)
         if f is None:
-            f = tkfont.Font(family=RETRO_THEMES[settings["theme"]]["font_mono"][0],
+            f = tkfont.Font(family=get_theme(settings["theme"])["font_mono"][0],
                             size=size, weight=weight)
             _font_cache[key] = f
         return f
@@ -409,7 +414,7 @@ def run_overlay(log_path):
 
     # -- rendering -------------------------------------------------------------
     def theme():
-        return RETRO_THEMES[settings["theme"]]
+        return get_theme(settings["theme"])
 
     _chroma = {"cur": None}
 
@@ -991,11 +996,17 @@ def run_overlay(log_path):
 
     def open_report():
         import subprocess
-        script = os.path.join(APP_DIR, "eql_session_report.py")
-        if not os.path.isfile(script):
-            return
         try:
-            subprocess.Popen([sys.executable, script, live["watcher"].path], cwd=APP_DIR)
+            if getattr(sys, "frozen", False):
+                target = os.path.join(APP_DIR, "eql_session_report.exe")
+                if not os.path.isfile(target):
+                    return
+                subprocess.Popen([target, live["watcher"].path], cwd=APP_DIR)
+            else:
+                script = os.path.join(APP_DIR, "eql_session_report.py")
+                if not os.path.isfile(script):
+                    return
+                subprocess.Popen([sys.executable, script, live["watcher"].path], cwd=APP_DIR)
         except OSError:
             pass
 
@@ -1060,7 +1071,9 @@ def run_overlay(log_path):
 
         m.add_separator()
         m.add_command(label="Reset current fight", command=reset_fight)
-        if os.path.isfile(os.path.join(APP_DIR, "eql_session_report.py")):
+        _report_sibling = "eql_session_report.exe" if getattr(sys, "frozen", False) \
+            else "eql_session_report.py"
+        if os.path.isfile(os.path.join(APP_DIR, _report_sibling)):
             m.add_command(label="Open Session Report...", command=open_report)
         m.add_command(label="Show unrecognized combat lines...", command=show_unmatched)
         m.add_command(label="Change log file...", command=change_log)

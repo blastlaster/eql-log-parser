@@ -20,26 +20,33 @@ Legends!" login banner starts a new one. This report splits the log into
 those sessions and shows ONE at a time -- pick which from the "Session"
 dropdown at the top (defaults to the most recent).
 
+The report uses the suite's shared theme set (RETRO_THEMES in
+eql_overlay_common; "16-bit Window" by default) -- pick another from the
+"Theme" dropdown in the top bar. The transparent Neon HUD theme is overlay-
+only and isn't offered here (a chroma-keyed background makes no sense for
+a regular window). The choice persists to eql_session_report_settings.json
+next to this script.
+
 Tabs
 -----
-* Overview        -- headline numbers plus a color-coded damage-split bar.
-* Graphs          -- bar charts with the NAMES of your spells/abilities on
-                     them: damage by ability, healing by ability, and DPS
-                     per fight over time. A category filter (Melee / Skill
-                     / Spell / Song / Dmg Shield / Pet) and a name search
-                     narrow the charts to whatever you're comparing, so
-                     "is Spell X out-damaging Spell Y" is one glance.
-* Damage/Healing by Ability -- the same data as sortable tables, with the
-                     same filter + search controls.
-* Sessions        -- EVERY session in the log side by side: length, fights,
-                     avg combat DPS, kills/hr, deaths. The best session per
-                     metric gets a star, a chart compares them visually,
-                     and PERSONAL RECORDS (best avg combat DPS, best
-                     kills/hr, biggest hit) persist to a per-character JSON
-                     across runs -- beat one and it's flagged NEW RECORD.
-                     Double-click a session row to open that session.
-* Stance / Invocation, Spells Cast, Passive Healing (est.), Unrecognized
-  lines -- as before (see below).
+* Overview     -- the dashboard: headline stat cards (length, DPS, kills,
+                  biggest hit, ...), the color-coded damage-split bar,
+                  damage TAKEN by type, top damage + healing abilities as
+                  bar charts, DPS per fight over time, and the
+                  Stance/Invocation performance tables -- one scrollable
+                  page, most of the session at a glance.
+* Abilities    -- the full sortable data: damage by ability and healing by
+                  ability tables (with category filter + name search), and
+                  every spell cast with mana/cast/recast from
+                  spells_us.txt.
+* Sessions     -- EVERY session in the log side by side: length, fights,
+                  avg combat DPS, kills/hr, deaths. The best session per
+                  metric gets a star, a chart compares them visually, and
+                  PERSONAL RECORDS persist to a per-character JSON across
+                  runs -- beat one and it's flagged NEW RECORD.
+                  Double-click a session row to open that session.
+* Diagnostics  -- Passive Healing (est.) reference math and the
+                  unrecognized-lines calibration view.
 
 What's empirical vs. exact
 ------------------------------
@@ -54,11 +61,11 @@ fights by whichever Stance/Invocation was active when each fight started,
 and averages observed DPS/DTPS across those fights. More fights in a
 bucket = a more trustworthy average.
 
-Passive Healing (est.) tab: some effects -- notably a Bard's heal-over-time
+Passive Healing (est.): some effects -- notably a Bard's heal-over-time
 songs -- never produce a "healed X for N hit points" log line at all.
-This tab estimates candidate heal magnitudes from `spells_us.txt` itself
-(EQEmu classic-era reference math, PER-TICK for HoTs -- cross-check a
-manual guess, don't treat as exact).
+The Diagnostics tab estimates candidate heal magnitudes from
+`spells_us.txt` itself (EQEmu classic-era reference math, PER-TICK for
+HoTs -- cross-check a manual guess, don't treat as exact).
 """
 
 import json
@@ -73,36 +80,79 @@ from eql_combat_tracker import (
     CombatTracker, YOU_LABEL, STANCES, INVOCATIONS, CATEGORY_LABELS,
     CATEGORIES,
 )
+from eql_overlay_common import Settings, RETRO_THEMES, DEFAULT_THEME, get_theme
 from eql_spell_db import SPELL_DB, CLASS_NAMES
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):
+    APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
+SETTINGS_FILE = os.path.join(APP_DIR, "eql_session_report_settings.json")
 
 SESSION_MARK = "Welcome to EverQuest Legends!"
 ZONE_RE = re.compile(r"You have entered (.+)\.")
 
+# The report is a regular window, so transparent (chroma-key) themes are
+# excluded from its picker -- those only make sense floating over the game.
+SUITE_THEMES = {k: v for k, v in RETRO_THEMES.items()
+                if not v.get("transparent")}
+
+
+def _report_theme_key(key):
+    """Clamp a saved theme key to one this window can actually use."""
+    return key if key in SUITE_THEMES else DEFAULT_THEME
+
+
 # -- report palette ----------------------------------------------------------
-BG = "#f4f5f7"          # window background
-PANEL = "#ffffff"       # card/table background
-INK = "#15202b"         # main text
-SUBTLE = "#5c6773"      # captions / secondary text
-GRID = "#e3e6ea"        # separators, chart gridlines
-ACCENT = "#2f6fdb"      # interactive highlights
-GOOD = "#2e9e5b"        # above-average bars
-MUTED_BAR = "#b9c2cc"   # below-average bars
-BEST_BG = "#fdf3d7"     # row highlight for best session
-RECORD = "#b8860b"      # personal-record gold
+# Derived from the suite-wide shared theme set (RETRO_THEMES in
+# eql_overlay_common; "16-bit Window" by default) so this report matches the
+# overlays. apply_palette() rebinds the module-level names every module-level
+# draw helper reads; picking a new theme from the top bar rebuilds the whole
+# window with the new palette.
+def _mix(c1, c2, t):
+    """Blend two '#rrggbb' colors: t=0 -> c1, t=1 -> c2. Used to derive the
+    report-only tones (gridlines, row stripes, highlights) that the compact
+    overlay themes don't define directly."""
+    a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(c2[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#%02x%02x%02x" % tuple(round(x + (y - x) * t) for x, y in zip(a, b))
 
-CAT_COLORS = {          # one color per damage category, used everywhere
-    "melee": "#4c86d8", "skill": "#9a6bdd", "spell": "#e0a63a",
-    "song": "#d65c8b", "ds": "#3fae7a", "pet": "#7a8699",
-}
-HEAL_COLOR = "#2e9e5b"
 
-FONT = ("Segoe UI", 9)
-FONT_SMALL = ("Segoe UI", 8)
-FONT_BOLD = ("Segoe UI", 9, "bold")
-FONT_TITLE = ("Segoe UI", 10, "bold")
-FONT_MONO = ("Consolas", 10)
+def apply_palette(theme_key):
+    global THEME, BG, PANEL, INK, SUBTLE, GRID, ACCENT, GOOD, MUTED_BAR
+    global BEST_BG, RECORD, STRIPE, HEAD_BG, CAT_COLORS, HEAL_COLOR
+    global FONT, FONT_SMALL, FONT_BOLD, FONT_TITLE, FONT_MONO, FONT_BIG
+    th = get_theme(_report_theme_key(theme_key))
+    THEME = th
+    BG = th["bg"]                        # window background
+    PANEL = th["panel"]                  # card/table background
+    INK = th["fg"]                       # main text
+    SUBTLE = th["dim"]                   # captions / secondary text
+    GRID = _mix(PANEL, INK, 0.18)        # separators, chart gridlines
+    ACCENT = th["accent"]                # interactive highlights
+    GOOD = th["alt"]                     # above-average bars
+    MUTED_BAR = _mix(PANEL, INK, 0.35)   # below-average bars
+    BEST_BG = _mix(PANEL, th["warn"], 0.25)   # best-session row highlight
+    RECORD = th["warn"]                  # personal-record gold
+    STRIPE = _mix(PANEL, BG, 0.5)        # odd table rows
+    HEAD_BG = _mix(PANEL, INK, 0.12)     # table headings
+
+    CAT_COLORS = {   # one color per damage category, used everywhere
+        "melee": th["alt"], "skill": th["accent"], "spell": th["warn"],
+        "song": th["bad"], "ds": th["fg"], "pet": th["dim"],
+    }
+    HEAL_COLOR = th["alt"]
+
+    fam = th["font_mono"][0]
+    FONT = (fam, 9)
+    FONT_SMALL = (fam, 8)
+    FONT_BOLD = (fam, 9, "bold")
+    FONT_TITLE = (fam, 10, "bold")
+    FONT_MONO = (fam, 10)
+    FONT_BIG = (fam, 15, "bold")
+
+
+apply_palette(DEFAULT_THEME)
 
 # personal-record thresholds -- a lucky 20-second session shouldn't set an
 # unbeatable "best avg DPS" record, so records only count when the session
@@ -211,6 +261,10 @@ def _fmt_minutes(m):
     return f"{int(m)//60}h {int(m)%60:02d}m" if m >= 60 else f"{m:.0f}m"
 
 
+def _ellipsize(s, n):
+    return s if len(s) <= n else s[:n - 1] + "…"
+
+
 # ----------------------------------------------------------------------------
 # Records (personal bests, persisted per character)
 # ----------------------------------------------------------------------------
@@ -271,28 +325,43 @@ RECORD_TITLES = {"best_avg_dps": "Best avg combat DPS",
 
 
 # ----------------------------------------------------------------------------
-# Canvas chart helpers
+# Canvas chart helpers (all theme-aware: pixel bevels, CRT/Arcade scanlines)
 # ----------------------------------------------------------------------------
-def draw_hbar_chart(canvas, rows, title, empty_msg):
+def _decorate(canvas, w, h):
+    """Retro dressing for a chart canvas: scanlines on glow themes, a
+    chunky bevel border on the pixel theme, nothing on Vintage."""
+    if THEME.get("glow"):
+        for y in range(0, h, 4):
+            canvas.create_line(0, y, w, y, fill=THEME["scanline"])
+    elif THEME.get("border_light"):
+        canvas.create_rectangle(1, 1, w - 2, h - 2,
+                                outline=THEME["border_light"], width=2)
+        canvas.create_rectangle(0, 0, w - 1, h - 1,
+                                outline=THEME["border_dark"], width=1)
+
+
+def draw_hbar_chart(canvas, rows, title, empty_msg, max_note_w=130):
     """Horizontal bar chart: rows = (name, value, color, note). Names on
     the left, value + note on the bar's right. Scales to canvas width."""
     canvas.delete("all")
-    w = max(canvas.winfo_width(), 400)
+    w = max(canvas.winfo_width(), 320)
+    h = max(canvas.winfo_height(), 80)
+    _decorate(canvas, w, h)
+    canvas.create_text(10, 14, anchor="w", text=title, fill=INK,
+                       font=FONT_TITLE)
     if not rows:
-        canvas.create_text(w // 2, 60, text=empty_msg, fill=SUBTLE,
+        canvas.create_text(w // 2, h // 2, text=empty_msg, fill=SUBTLE,
                            font=FONT)
         return
-    canvas.create_text(10, 12, anchor="w", text=title, fill=INK,
-                       font=FONT_TITLE)
-    name_w = min(220, max(120, max(len(r[0]) for r in rows) * 7))
+    name_w = min(200, max(90, max(len(r[0]) for r in rows) * 7))
     x0 = name_w + 16
-    x1 = w - 130
+    x1 = w - max_note_w
     max_v = max(r[1] for r in rows) or 1
     y = 36
     row_h = 24
     for name, value, color, note in rows:
-        canvas.create_text(name_w + 8, y + 8, anchor="e", text=name,
-                           fill=INK, font=FONT)
+        canvas.create_text(name_w + 8, y + 8, anchor="e",
+                           text=_ellipsize(name, 26), fill=INK, font=FONT)
         bw = int((x1 - x0) * value / max_v)
         canvas.create_rectangle(x0, y, x0 + max(bw, 2), y + 16,
                                 fill=color, outline="")
@@ -308,13 +377,14 @@ def draw_vbar_chart(canvas, bars, title, avg=None, avg_label="", best=None):
     Optional dashed average line; `best` index gets a star."""
     canvas.delete("all")
     w = max(canvas.winfo_width(), 400)
-    h = max(canvas.winfo_height(), 220)
+    h = max(canvas.winfo_height(), 200)
+    _decorate(canvas, w, h)
+    canvas.create_text(10, 14, anchor="w", text=title, fill=INK,
+                       font=FONT_TITLE)
     if not bars:
-        canvas.create_text(w // 2, 60, text="(no data in this session)",
+        canvas.create_text(w // 2, h // 2, text="(no data in this session)",
                            fill=SUBTLE, font=FONT)
         return
-    canvas.create_text(10, 12, anchor="w", text=title, fill=INK,
-                       font=FONT_TITLE)
     pad_l, pad_r, pad_t, pad_b = 24, 16, 34, 34
     plot_w, plot_h = w - pad_l - pad_r, h - pad_t - pad_b
     max_v = max(v for _, v, _, _ in bars) or 1
@@ -332,7 +402,7 @@ def draw_vbar_chart(canvas, bars, title, avg=None, avg_label="", best=None):
                                font=FONT_SMALL)
         if best is not None and i == best:
             canvas.create_text(cx, y0 - 20, text="★", fill=RECORD,
-                               font=("Segoe UI", 11))
+                               font=(FONT[0], 11))
         if n <= 30:
             canvas.create_text(cx, pad_t + plot_h + 10, text=xlbl,
                                fill=SUBTLE, font=FONT_SMALL)
@@ -346,13 +416,109 @@ def draw_vbar_chart(canvas, bars, title, avg=None, avg_label="", best=None):
                            fill=SUBTLE, font=FONT_SMALL)
 
 
+def draw_stat_cards(canvas, cards):
+    """Headline numbers as a wrapping row of retro stat cards:
+    cards = (label, value, sub). Canvas height adjusts to the row count."""
+    canvas.delete("all")
+    w = max(canvas.winfo_width(), 320)
+    card_w, card_h, gap = 152, 76, 8
+    per_row = max(1, int((w - gap) // (card_w + gap)))
+    rows = (len(cards) + per_row - 1) // per_row
+    total_h = gap + rows * (card_h + gap)
+    # only touch the height when it actually changes -- configuring it
+    # unconditionally would fire <Configure> -> redraw -> configure forever
+    if int(canvas["height"]) != total_h:
+        canvas.configure(height=total_h)
+    for i, (label, value, sub) in enumerate(cards):
+        r, c = divmod(i, per_row)
+        x = gap + c * (card_w + gap)
+        y = gap + r * (card_h + gap)
+        canvas.create_rectangle(x, y, x + card_w, y + card_h,
+                                fill=PANEL, outline="")
+        if THEME.get("glow"):
+            for sy in range(y, y + card_h, 4):
+                canvas.create_line(x, sy, x + card_w, sy,
+                                   fill=THEME["scanline"])
+        if THEME.get("border_light"):
+            canvas.create_rectangle(x + 1, y + 1, x + card_w - 2,
+                                    y + card_h - 2,
+                                    outline=THEME["border_light"], width=2)
+            canvas.create_rectangle(x, y, x + card_w - 1, y + card_h - 1,
+                                    outline=THEME["border_dark"], width=1)
+        else:
+            canvas.create_rectangle(x, y, x + card_w, y + card_h,
+                                    outline=GRID)
+        canvas.create_text(x + 10, y + 14, anchor="w",
+                           text=label.upper(), fill=SUBTLE, font=FONT_SMALL)
+        canvas.create_text(x + 10, y + 38, anchor="w",
+                           text=str(value), fill=ACCENT, font=FONT_BIG)
+        if sub:
+            canvas.create_text(x + 10, y + 61, anchor="w",
+                               text=_ellipsize(str(sub), 22),
+                               fill=SUBTLE, font=FONT_SMALL)
+
+
+def draw_split_bar(canvas, tracker):
+    """Color-coded damage-split bar + legend with category names."""
+    canvas.delete("all")
+    w = max(canvas.winfo_width(), 400)
+    h = max(canvas.winfo_height(), 64)
+    _decorate(canvas, w, h)
+    pad = 10
+    totals = {c: getattr(tracker, f"{c}_dmg_out") for c in CATEGORIES}
+    total = sum(totals.values())
+    canvas.create_text(pad, 14, anchor="w", fill=INK,
+                       font=FONT_TITLE, text="Damage given by source")
+    if not total:
+        canvas.create_text(pad, 38, anchor="w", fill=SUBTLE,
+                           font=FONT, text="(no damage this session)")
+        return
+    x = pad
+    bar_w = w - 2 * pad
+    for c in CATEGORIES:
+        if not totals[c]:
+            continue
+        bw = int(bar_w * totals[c] / total)
+        canvas.create_rectangle(x, 26, x + max(bw, 1), 44,
+                                fill=CAT_COLORS[c], outline="")
+        x += max(bw, 1)
+    lx = pad
+    for c in CATEGORIES:
+        if not totals[c]:
+            continue
+        pct = round(100 * totals[c] / total)
+        txt = f"{CATEGORY_LABELS[c]} {pct}%"
+        canvas.create_rectangle(lx, 52, lx + 9, 61,
+                                fill=CAT_COLORS[c], outline="")
+        t = canvas.create_text(lx + 13, 56, anchor="w", text=txt,
+                               fill=SUBTLE, font=FONT_SMALL)
+        lx = canvas.bbox(t)[2] + 14
+
+
 # ----------------------------------------------------------------------------
 # Report window
 # ----------------------------------------------------------------------------
 def run_report(log_path):
+    """Outer shell: builds the report window, and rebuilds it from scratch
+    whenever a new theme is picked (every widget bakes its colors in at
+    creation, so a clean rebuild beats chasing hundreds of configure()s).
+    The window's size/position and the chosen log survive the rebuild."""
+    settings = Settings(SETTINGS_FILE, {"theme": DEFAULT_THEME})
+    ctx = {"log_path": log_path, "geometry": "1150x780"}
+    while _report_window(ctx, settings):
+        pass
+
+
+def _report_window(ctx, settings):
+    """One life of the report window. Returns True if it was closed by the
+    theme picker (caller rebuilds), False if the user closed it."""
+    apply_palette(settings.get("theme", DEFAULT_THEME))
+    log_path = ctx["log_path"]
+    restart = {"flag": False}
+
     root = tk.Tk()
     root.title(f"EQL Session Report -- {char_name_from(log_path) or 'Unknown'}")
-    root.geometry("920x640")
+    root.geometry(ctx["geometry"])
     root.configure(bg=BG)
 
     style = ttk.Style(root)
@@ -362,32 +528,86 @@ def run_report(log_path):
         pass
     style.configure(".", background=BG, foreground=INK, font=FONT)
     style.configure("TNotebook", background=BG, borderwidth=0)
-    style.configure("TNotebook.Tab", padding=(10, 5), font=FONT)
+    style.configure("TNotebook.Tab", padding=(10, 5), font=FONT,
+                    background=BG, foreground=SUBTLE)
     style.map("TNotebook.Tab",
               background=[("selected", PANEL)],
               foreground=[("selected", ACCENT)])
     style.configure("Treeview", background=PANEL, fieldbackground=PANEL,
-                    rowheight=22, font=FONT, borderwidth=0)
-    style.configure("Treeview.Heading", font=FONT_BOLD, background="#e9ebee",
+                    foreground=INK, rowheight=22, font=FONT, borderwidth=0)
+    style.map("Treeview",
+              background=[("selected", ACCENT)],
+              foreground=[("selected", BG)])
+    style.configure("Treeview.Heading", font=FONT_BOLD, background=HEAD_BG,
                     foreground=INK, relief="flat")
-    style.configure("TCombobox", fieldbackground=PANEL)
+    style.configure("TCombobox", fieldbackground=PANEL, background=PANEL,
+                    foreground=INK, arrowcolor=INK)
+    style.map("TCombobox",
+              fieldbackground=[("readonly", PANEL)],
+              foreground=[("readonly", INK)])
+    style.configure("Vertical.TScrollbar", background=PANEL,
+                    troughcolor=BG, arrowcolor=INK)
+    # the combobox dropdown list is a plain Listbox; theme it via options
+    root.option_add("*TCombobox*Listbox.background", PANEL)
+    root.option_add("*TCombobox*Listbox.foreground", INK)
+    root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
+    root.option_add("*TCombobox*Listbox.selectForeground", BG)
+    root.option_add("*TCombobox*Listbox.font", FONT)
 
-    # -- top bar ---------------------------------------------------------------
+    def themed_button(parent, **kw):
+        return tk.Button(parent, bg=PANEL, fg=INK, activebackground=ACCENT,
+                         activeforeground=BG, relief="flat", font=FONT_SMALL,
+                         padx=8, **kw)
+
+    # -- top bar: two rows so the buttons can never be squeezed out ------------
     top = tk.Frame(root, padx=8, pady=6, bg=BG)
     top.pack(fill="x")
-    path_lbl = tk.Label(top, text=log_path, anchor="w", font=FONT_SMALL,
+
+    row1 = tk.Frame(top, bg=BG)
+    row1.pack(fill="x")
+    # buttons are packed FIRST (from the right) so the expanding path label
+    # can only ever shrink itself, not push them off the window
+    change_btn = themed_button(row1, text="Change log...")
+    change_btn.pack(side="right", padx=(6, 0))
+    refresh_btn = themed_button(row1, text="Refresh")
+    refresh_btn.pack(side="right")
+    path_lbl = tk.Label(row1, text=log_path, anchor="w", font=FONT_SMALL,
                         fg=SUBTLE, bg=BG)
     path_lbl.pack(side="left", fill="x", expand=True)
+
+    row2 = tk.Frame(top, bg=BG)
+    row2.pack(fill="x", pady=(5, 0))
+    tk.Label(row2, text="Session:", font=FONT_SMALL, bg=BG, fg=INK).pack(
+        side="left")
+    session_var = tk.StringVar()
+    session_box = ttk.Combobox(row2, textvariable=session_var,
+                               state="readonly", width=46)
+    session_box.pack(side="left", padx=(2, 12))
+
+    tk.Label(row2, text="Theme:", font=FONT_SMALL, bg=BG, fg=INK).pack(
+        side="left")
+    THEME_LABELS = {k: spec["label"] for k, spec in SUITE_THEMES.items()}
+    LABEL_TO_THEME = {v: k for k, v in THEME_LABELS.items()}
+    cur_key = _report_theme_key(settings.get("theme", DEFAULT_THEME))
+    theme_var = tk.StringVar(value=THEME_LABELS[cur_key])
+    theme_box = ttk.Combobox(row2, textvariable=theme_var, state="readonly",
+                             values=list(THEME_LABELS.values()), width=16)
+    theme_box.pack(side="left", padx=(2, 0))
 
     state = {"tracker": None, "sessions": load_sessions(log_path),
              "summaries": None, "records": {}, "new_records": set()}
 
-    tk.Label(top, text="Session:", font=FONT_SMALL, bg=BG).pack(
-        side="left", padx=(8, 2))
-    session_var = tk.StringVar()
-    session_box = ttk.Combobox(top, textvariable=session_var,
-                               state="readonly", width=42)
-    session_box.pack(side="left")
+    def on_theme_pick(_e):
+        key = LABEL_TO_THEME.get(theme_var.get(), DEFAULT_THEME)
+        if key == settings.get("theme"):
+            return
+        settings["theme"] = key
+        settings.save()
+        ctx["geometry"] = root.geometry()   # rebuild in place
+        restart["flag"] = True
+        root.destroy()
+
+    theme_box.bind("<<ComboboxSelected>>", on_theme_pick)
 
     def reload_session_list():
         state["sessions"] = load_sessions(log_path)
@@ -397,7 +617,7 @@ def run_report(log_path):
         session_box.current(len(labels) - 1)   # default: most recent
 
     nb = ttk.Notebook(root)
-    nb.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+    nb.pack(fill="both", expand=True, padx=8, pady=(4, 8))
 
     def striped_insert(tree, name, values, tags=()):
         n = len(tree.get_children())
@@ -405,11 +625,220 @@ def run_report(log_path):
                     tags=tags + (("odd",) if n % 2 else ("even",)))
 
     def setup_stripes(tree):
-        tree.tag_configure("odd", background="#f7f8fa")
+        tree.tag_configure("odd", background=STRIPE)
         tree.tag_configure("even", background=PANEL)
-        tree.tag_configure("best", background=BEST_BG)
+        tree.tag_configure("best", background=BEST_BG, foreground=BG)
 
-    # shared filter state (Graphs tab + ability tables stay in sync)
+    # ==========================================================================
+    # Overview tab -- the dashboard (scrollable)
+    # ==========================================================================
+    dash_outer = tk.Frame(nb, bg=BG)
+    nb.add(dash_outer, text="Overview")
+    dash_canvas = tk.Canvas(dash_outer, bg=BG, highlightthickness=0)
+    dash_scroll = ttk.Scrollbar(dash_outer, orient="vertical",
+                                command=dash_canvas.yview)
+    dash = tk.Frame(dash_canvas, bg=BG)
+    dash_win = dash_canvas.create_window((0, 0), window=dash, anchor="nw")
+    dash_canvas.configure(yscrollcommand=dash_scroll.set)
+    dash_scroll.pack(side="right", fill="y")
+    dash_canvas.pack(side="left", fill="both", expand=True)
+    dash.bind("<Configure>", lambda e: dash_canvas.configure(
+        scrollregion=dash_canvas.bbox("all")))
+    dash_canvas.bind("<Configure>", lambda e: dash_canvas.itemconfigure(
+        dash_win, width=e.width))
+
+    def _on_wheel(e):
+        try:
+            if nb.select() == str(dash_outer):
+                dash_canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
+        except tk.TclError:
+            pass
+    root.bind_all("<MouseWheel>", _on_wheel)
+
+    # row 1: headline stat cards
+    cards_canvas = tk.Canvas(dash, bg=BG, highlightthickness=0, height=92)
+    cards_canvas.pack(fill="x", padx=4, pady=(4, 2))
+
+    # row 2: damage split bar (left) + damage taken (right)
+    split_row = tk.Frame(dash, bg=BG)
+    split_row.pack(fill="x", padx=4, pady=2)
+    split_canvas = tk.Canvas(split_row, bg=PANEL, highlightthickness=0,
+                             height=110)
+    split_canvas.pack(side="left", fill="both", expand=True, padx=(0, 4))
+    taken_canvas = tk.Canvas(split_row, bg=PANEL, highlightthickness=0,
+                             height=110, width=380)
+    taken_canvas.pack(side="left", fill="y")
+
+    # row 3: top damage abilities (left) + top healing (right)
+    tops_row = tk.Frame(dash, bg=BG)
+    tops_row.pack(fill="x", padx=4, pady=2)
+    topdmg_canvas = tk.Canvas(tops_row, bg=PANEL, highlightthickness=0,
+                              height=240)
+    topdmg_canvas.pack(side="left", fill="both", expand=True, padx=(0, 4))
+    topheal_canvas = tk.Canvas(tops_row, bg=PANEL, highlightthickness=0,
+                               height=240)
+    topheal_canvas.pack(side="left", fill="both", expand=True)
+
+    # row 4: DPS per fight over the session
+    dps_canvas = tk.Canvas(dash, bg=PANEL, highlightthickness=0, height=230)
+    dps_canvas.pack(fill="x", padx=4, pady=2)
+
+    # row 5: stance / invocation performance side by side
+    combo_row = tk.Frame(dash, bg=BG)
+    combo_row.pack(fill="x", padx=4, pady=(2, 8))
+
+    stance_col = tk.Frame(combo_row, bg=BG)
+    stance_col.pack(side="left", fill="both", expand=True, padx=(0, 4))
+    stance_hdr = tk.Label(stance_col, text="Stances", font=FONT_TITLE,
+                          bg=BG, fg=INK, anchor="w")
+    stance_hdr.pack(fill="x")
+    stance_tree = ttk.Treeview(stance_col,
+                               columns=("fights", "dps", "dtps", "effect"),
+                               show="tree headings", height=4)
+    for col, label, w in (("fights", "Fights", 50), ("dps", "Avg DPS", 70),
+                          ("dtps", "Avg DTPS", 70),
+                          ("effect", "Known effect", 220)):
+        stance_tree.heading(col, text=label)
+        stance_tree.column(col, width=w,
+                           anchor="w" if col == "effect" else "center")
+    stance_tree.column("#0", width=120)
+    stance_tree.heading("#0", text="Stance")
+    stance_tree.pack(fill="x")
+    setup_stripes(stance_tree)
+
+    invoc_col = tk.Frame(combo_row, bg=BG)
+    invoc_col.pack(side="left", fill="both", expand=True)
+    invoc_hdr = tk.Label(invoc_col, text="Invocations", font=FONT_TITLE,
+                         bg=BG, fg=INK, anchor="w")
+    invoc_hdr.pack(fill="x")
+    invoc_tree = ttk.Treeview(invoc_col,
+                              columns=("fights", "dps", "dtps", "effect"),
+                              show="tree headings", height=4)
+    for col, label, w in (("fights", "Fights", 50), ("dps", "Avg DPS", 70),
+                          ("dtps", "Avg DTPS", 70),
+                          ("effect", "Known effect", 220)):
+        invoc_tree.heading(col, text=label)
+        invoc_tree.column(col, width=w,
+                          anchor="w" if col == "effect" else "center")
+    invoc_tree.column("#0", width=120)
+    invoc_tree.heading("#0", text="Invocation")
+    invoc_tree.pack(fill="x")
+    setup_stripes(invoc_tree)
+
+    tk.Label(dash, text="Stance/Invocation rows average completed fights "
+                        "started under each; effects from eqlwiki.com. "
+                        "More fights = a more trustworthy number.",
+             font=FONT_SMALL, fg=SUBTLE, bg=BG, anchor="w",
+             wraplength=900, justify="left").pack(fill="x", padx=6,
+                                                  pady=(0, 8))
+
+    # -- dashboard redraw helpers ----------------------------------------------
+    def redraw_cards(*_):
+        tracker = state["tracker"]
+        if tracker is None:
+            return
+        dmg_total = sum(getattr(tracker, f"{c}_dmg_out") for c in CATEGORIES)
+        top_dmg = [n for n, _s in tracker.ability_rows(kind="dmg")[:1]]
+        big_name, big_val = "", 0
+        for name, s in tracker.ability_rows(kind="dmg"):
+            if s["biggest"] > big_val:
+                big_name, big_val = name, s["biggest"]
+        cards = [
+            ("Session", _fmt_minutes(tracker.session_elapsed() / 60),
+             f"{tracker.fights_completed} fights"),
+            ("Avg DPS", f"{tracker.avg_combat_dps():.1f}", "active combat"),
+            ("Avg DTPS", f"{tracker.avg_combat_dtps():.1f}", "damage taken"),
+            ("Damage", _fmt_num(dmg_total),
+             f"top: {top_dmg[0]}" if top_dmg else ""),
+            ("Healing", _fmt_num(tracker.heal_out_total),
+             f"received {_fmt_num(tracker.heal_in_total)}"),
+            ("Kills", len(tracker.kills),
+             f"{tracker.kills_per_hour():.1f}/hr"),
+            ("Deaths", len(tracker.deaths), ""),
+            ("Biggest hit", _fmt_num(big_val), big_name),
+            ("Stance", _ellipsize(tracker.stance or "?", 12),
+             f"invoc: {tracker.invocation or '?'}"),
+        ]
+        draw_stat_cards(cards_canvas, cards)
+
+    def redraw_split(*_):
+        if state["tracker"] is not None:
+            draw_split_bar(split_canvas, state["tracker"])
+
+    def redraw_taken(*_):
+        tracker = state["tracker"]
+        if tracker is None:
+            return
+        rows = [(label, val, color, "") for label, val, color in (
+            ("Physical", tracker.physical_dmg_in, THEME["bad"]),
+            ("Spell/Song", tracker.spell_dmg_in + tracker.song_dmg_in,
+             THEME["warn"]),
+            ("Dmg Shield", tracker.ds_dmg_in, THEME["accent"]),
+            ("Your pet", tracker.pet_dmg_in, THEME["dim"]),
+        ) if val]
+        draw_hbar_chart(taken_canvas, rows, "Damage taken",
+                        "(no damage taken)", max_note_w=70)
+
+    def redraw_topdmg(*_):
+        tracker = state["tracker"]
+        if tracker is None:
+            return
+        rows = []
+        for name, s in tracker.ability_rows(kind="dmg")[:8]:
+            color = CAT_COLORS.get(s["category"], MUTED_BAR)
+            crit = f", {s['crits']} crit" if s["crits"] else ""
+            rows.append((name, s["total"], color,
+                         f"({s['hits']} hits{crit})"))
+        draw_hbar_chart(topdmg_canvas, rows, "Top damage abilities",
+                        "(no damage this session)")
+
+    def redraw_topheal(*_):
+        tracker = state["tracker"]
+        if tracker is None:
+            return
+        rows = []
+        for name, s in tracker.ability_rows(kind="heal")[:8]:
+            rows.append((name, s["total"], HEAL_COLOR,
+                         f"({s['hits']} casts)"))
+        draw_hbar_chart(topheal_canvas, rows, "Top healing abilities",
+                        "(no healing this session)")
+
+    def redraw_dps(*_):
+        tracker = state["tracker"]
+        if tracker is None:
+            return
+        fights = [f for f in reversed(tracker.history)
+                  if f.actors.get(YOU_LABEL)]
+        bars, vals = [], []
+        for f in fights:
+            you = f.actor(YOU_LABEL)
+            dps = you["dmg_out"] / f.elapsed()
+            vals.append(dps)
+            t = datetime.fromtimestamp(f.start_wall).strftime("%H:%M")
+            bars.append((t, dps, None, f"{dps:.0f}"))
+        avg = sum(vals) / len(vals) if vals else 0
+        bars = [(x, v, GOOD if v >= avg else MUTED_BAR, tl)
+                for (x, v, _c, tl) in bars]
+        draw_vbar_chart(dps_canvas, bars,
+                        "Your DPS per fight (active combat time, "
+                        "chronological; bright = above session average)",
+                        avg=avg, avg_label=f"avg {avg:.1f}")
+
+    for cnv, fn in ((cards_canvas, redraw_cards), (split_canvas, redraw_split),
+                    (taken_canvas, redraw_taken),
+                    (topdmg_canvas, redraw_topdmg),
+                    (topheal_canvas, redraw_topheal),
+                    (dps_canvas, redraw_dps)):
+        cnv.bind("<Configure>", fn)
+
+    # ==========================================================================
+    # Abilities tab -- full sortable tables + spells cast
+    # ==========================================================================
+    abil_frame = tk.Frame(nb, bg=BG, padx=4, pady=4)
+    nb.add(abil_frame, text="Abilities")
+
+    # shared filter state (applies to the damage table; search also filters
+    # the healing table)
     filter_cat = tk.StringVar(value="All")
     filter_text = tk.StringVar(value="")
     CAT_CHOICES = ["All"] + [CATEGORY_LABELS[c] for c in CATEGORIES]
@@ -422,142 +851,26 @@ def run_report(log_path):
         needle = filter_text.get().strip().lower()
         return needle in name.lower() if needle else True
 
-    def make_filter_row(parent, on_change):
-        row = tk.Frame(parent, bg=BG, pady=4)
-        tk.Label(row, text="Category:", font=FONT_SMALL, bg=BG).pack(side="left")
-        cat_box = ttk.Combobox(row, textvariable=filter_cat, state="readonly",
-                               values=CAT_CHOICES, width=11)
-        cat_box.pack(side="left", padx=(2, 10))
-        cat_box.bind("<<ComboboxSelected>>", lambda e: on_change())
-        tk.Label(row, text="Search:", font=FONT_SMALL, bg=BG).pack(side="left")
-        ent = tk.Entry(row, textvariable=filter_text, width=18, font=FONT)
-        ent.pack(side="left", padx=(2, 10))
-        ent.bind("<KeyRelease>", lambda e: on_change())
-        return row
+    filter_row = tk.Frame(abil_frame, bg=BG, pady=4)
+    filter_row.pack(fill="x")
+    tk.Label(filter_row, text="Category:", font=FONT_SMALL, bg=BG,
+             fg=INK).pack(side="left")
+    cat_box = ttk.Combobox(filter_row, textvariable=filter_cat,
+                           state="readonly", values=CAT_CHOICES, width=11)
+    cat_box.pack(side="left", padx=(2, 10))
+    tk.Label(filter_row, text="Search:", font=FONT_SMALL, bg=BG,
+             fg=INK).pack(side="left")
+    search_ent = tk.Entry(filter_row, textvariable=filter_text, width=18,
+                          font=FONT, bg=PANEL, fg=INK, insertbackground=INK,
+                          relief="flat")
+    search_ent.pack(side="left", padx=(2, 10))
 
-    # -- Overview tab ------------------------------------------------------------
-    overview = tk.Frame(nb, padx=12, pady=10, bg=PANEL)
-    nb.add(overview, text="Overview")
-    split_canvas = tk.Canvas(overview, height=64, bg=PANEL,
-                             highlightthickness=0)
-    split_canvas.pack(fill="x")
-    overview_lbl = tk.Label(overview, justify="left", anchor="nw",
-                            font=FONT_MONO, fg=INK, bg=PANEL)
-    overview_lbl.pack(fill="both", expand=True, anchor="nw", pady=(8, 0))
-
-    def draw_split_bar(tracker):
-        """Color-coded damage-split bar + legend with category names."""
-        split_canvas.delete("all")
-        w = max(split_canvas.winfo_width(), 500)
-        totals = {c: getattr(tracker, f"{c}_dmg_out") for c in CATEGORIES}
-        total = sum(totals.values())
-        split_canvas.create_text(0, 10, anchor="w", fill=INK,
-                                 font=FONT_TITLE, text="Damage given by source")
-        if not total:
-            split_canvas.create_text(0, 34, anchor="w", fill=SUBTLE,
-                                     font=FONT, text="(no damage this session)")
-            return
-        x = 0
-        for c in CATEGORIES:
-            if not totals[c]:
-                continue
-            bw = int((w - 2) * totals[c] / total)
-            split_canvas.create_rectangle(x, 24, x + max(bw, 1), 40,
-                                          fill=CAT_COLORS[c], outline="")
-            x += max(bw, 1)
-        lx = 0
-        for c in CATEGORIES:
-            if not totals[c]:
-                continue
-            pct = round(100 * totals[c] / total)
-            txt = f"{CATEGORY_LABELS[c]} {pct}%"
-            split_canvas.create_rectangle(lx, 48, lx + 9, 57,
-                                          fill=CAT_COLORS[c], outline="")
-            t = split_canvas.create_text(lx + 13, 52, anchor="w", text=txt,
-                                         fill=SUBTLE, font=FONT_SMALL)
-            lx = split_canvas.bbox(t)[2] + 14
-
-    # -- Graphs tab ---------------------------------------------------------------
-    graphs = tk.Frame(nb, padx=8, pady=6, bg=BG)
-    nb.add(graphs, text="Graphs")
-    graph_controls = tk.Frame(graphs, bg=BG)
-    graph_controls.pack(fill="x")
-    tk.Label(graph_controls, text="Show:", font=FONT_SMALL, bg=BG).pack(side="left")
-    GRAPH_CHOICES = ("Damage by ability", "Healing by ability",
-                     "DPS per fight (last 20)")
-    graph_var = tk.StringVar(value=GRAPH_CHOICES[0])
-    graph_box = ttk.Combobox(graph_controls, textvariable=graph_var,
-                             state="readonly", values=GRAPH_CHOICES, width=22)
-    graph_box.pack(side="left", padx=(2, 10))
-    graph_filter_holder = tk.Frame(graphs, bg=BG)
-    graph_filter_holder.pack(fill="x")
-    graph_canvas = tk.Canvas(graphs, bg=PANEL, highlightthickness=0)
-    graph_canvas.pack(fill="both", expand=True, pady=(4, 0))
-    graph_hint = tk.Label(
-        graphs, bg=BG, fg=SUBTLE, font=FONT_SMALL, justify="left",
-        text="Bars are named after the actual spell/ability from the log. "
-             "Use Category + Search to compare just the things you're "
-             "testing. DPS-per-fight: green = above this session's average.")
-    graph_hint.pack(anchor="w", pady=(2, 0))
-
-    def redraw_graph(*_):
-        tracker = state["tracker"]
-        if tracker is None:
-            return
-        choice = graph_var.get()
-        if choice == "Damage by ability":
-            rows = []
-            for name, s in tracker.ability_rows(kind="dmg"):
-                if not ability_passes(name, s):
-                    continue
-                color = CAT_COLORS.get(s["category"], MUTED_BAR)
-                crit = f", {s['crits']} crit" if s["crits"] else ""
-                rows.append((name, s["total"], color,
-                             f"({s['hits']} hits{crit}, big {_fmt_num(s['biggest'])})"))
-            draw_hbar_chart(graph_canvas, rows[:16], "Damage by ability",
-                            "(nothing matches the current filter)")
-        elif choice == "Healing by ability":
-            rows = []
-            for name, s in tracker.ability_rows(kind="heal"):
-                needle = filter_text.get().strip().lower()
-                if needle and needle not in name.lower():
-                    continue
-                rows.append((name, s["total"], HEAL_COLOR,
-                             f"({s['hits']} casts, big {_fmt_num(s['biggest'])})"))
-            draw_hbar_chart(graph_canvas, rows[:16], "Healing by ability",
-                            "(no healing matches the current filter)")
-        else:   # DPS per fight
-            fights = [f for f in reversed(tracker.history)
-                      if f.actors.get(YOU_LABEL)]
-            bars = []
-            vals = []
-            for f in fights:
-                you = f.actor(YOU_LABEL)
-                dps = you["dmg_out"] / f.elapsed()
-                vals.append(dps)
-                t = datetime.fromtimestamp(f.start_wall).strftime("%H:%M")
-                bars.append((t, dps, None, f"{dps:.0f}"))
-            avg = sum(vals) / len(vals) if vals else 0
-            bars = [(x, v, GOOD if v >= avg else MUTED_BAR, tl)
-                    for (x, v, _c, tl) in bars]
-            draw_vbar_chart(graph_canvas, bars,
-                            "Your DPS per fight (active combat time, chronological)",
-                            avg=avg, avg_label=f"avg {avg:.1f}")
-
-    graph_box.bind("<<ComboboxSelected>>", redraw_graph)
-    make_filter_row(graph_filter_holder,
-                    lambda: (redraw_graph(), refresh_ability_tables())
-                    ).pack(fill="x")
-    graph_canvas.bind("<Configure>", redraw_graph)
-
-    # -- Abilities: Damage tab -----------------------------------------------------
-    dmg_frame = tk.Frame(nb, bg=BG)
-    nb.add(dmg_frame, text="Damage by Ability")
-    make_filter_row(dmg_frame, lambda: (refresh_ability_tables(),
-                                        redraw_graph())).pack(fill="x", padx=4)
-    dmg_tree = ttk.Treeview(dmg_frame,
-                            columns=("total", "hits", "crits", "biggest", "type"),
-                            show="tree headings")
+    tk.Label(abil_frame, text="Damage by ability", font=FONT_TITLE, bg=BG,
+             fg=INK, anchor="w").pack(fill="x", pady=(4, 0))
+    dmg_tree = ttk.Treeview(abil_frame,
+                            columns=("total", "hits", "crits", "biggest",
+                                     "type"),
+                            show="tree headings", height=10)
     for col, label, w in (("total", "Total", 100), ("hits", "Hits", 60),
                           ("crits", "Crits", 60), ("biggest", "Biggest", 80),
                           ("type", "Type", 90)):
@@ -565,24 +878,45 @@ def run_report(log_path):
         dmg_tree.column(col, width=w, anchor="center")
     dmg_tree.column("#0", width=220)
     dmg_tree.heading("#0", text="Ability")
-    dmg_tree.pack(fill="both", expand=True, padx=4, pady=(0, 4))
+    dmg_tree.pack(fill="both", expand=True, pady=(2, 4))
     setup_stripes(dmg_tree)
 
-    # -- Abilities: Healing tab ------------------------------------------------------
-    heal_frame = tk.Frame(nb, bg=BG)
-    nb.add(heal_frame, text="Healing by Ability")
-    heal_tree = ttk.Treeview(heal_frame, columns=("total", "hits", "biggest"),
-                             show="tree headings")
-    for col, label, w in (("total", "Total", 100), ("hits", "Casts", 60),
+    lower = tk.Frame(abil_frame, bg=BG)
+    lower.pack(fill="both", expand=True)
+
+    heal_col = tk.Frame(lower, bg=BG)
+    heal_col.pack(side="left", fill="both", expand=True, padx=(0, 4))
+    tk.Label(heal_col, text="Healing by ability", font=FONT_TITLE, bg=BG,
+             fg=INK, anchor="w").pack(fill="x")
+    heal_tree = ttk.Treeview(heal_col, columns=("total", "hits", "biggest"),
+                             show="tree headings", height=8)
+    for col, label, w in (("total", "Total", 90), ("hits", "Casts", 60),
                           ("biggest", "Biggest", 80)):
         heal_tree.heading(col, text=label)
         heal_tree.column(col, width=w, anchor="center")
-    heal_tree.column("#0", width=220)
+    heal_tree.column("#0", width=180)
     heal_tree.heading("#0", text="Spell")
-    heal_tree.pack(fill="both", expand=True, padx=4, pady=4)
+    heal_tree.pack(fill="both", expand=True, pady=(2, 0))
     setup_stripes(heal_tree)
 
-    def refresh_ability_tables():
+    casts_col = tk.Frame(lower, bg=BG)
+    casts_col.pack(side="left", fill="both", expand=True)
+    tk.Label(casts_col, text="Spells cast (mana/cast/recast from "
+                             "spells_us.txt)", font=FONT_TITLE, bg=BG,
+             fg=INK, anchor="w").pack(fill="x")
+    casts_tree = ttk.Treeview(casts_col,
+                              columns=("count", "mana", "cast", "recast"),
+                              show="tree headings", height=8)
+    for col, label, w in (("count", "Casts", 55), ("mana", "Mana", 60),
+                          ("cast", "Cast", 70), ("recast", "Recast", 70)):
+        casts_tree.heading(col, text=label)
+        casts_tree.column(col, width=w, anchor="center")
+    casts_tree.column("#0", width=180)
+    casts_tree.heading("#0", text="Spell")
+    casts_tree.pack(fill="both", expand=True, pady=(2, 0))
+    setup_stripes(casts_tree)
+
+    def refresh_ability_tables(*_):
         tracker = state["tracker"]
         if tracker is None:
             return
@@ -595,11 +929,19 @@ def run_report(log_path):
                 _fmt_num(s["biggest"]),
                 CATEGORY_LABELS.get(s["category"], s["category"])))
         heal_tree.delete(*heal_tree.get_children())
+        needle = filter_text.get().strip().lower()
         for name, s in tracker.ability_rows(kind="heal"):
+            if needle and needle not in name.lower():
+                continue
             striped_insert(heal_tree, name, (
                 _fmt_num(s["total"]), s["hits"], _fmt_num(s["biggest"])))
 
-    # -- Sessions tab ------------------------------------------------------------
+    cat_box.bind("<<ComboboxSelected>>", refresh_ability_tables)
+    search_ent.bind("<KeyRelease>", refresh_ability_tables)
+
+    # ==========================================================================
+    # Sessions tab -- session-vs-session comparison + personal records
+    # ==========================================================================
     sess_frame = tk.Frame(nb, padx=8, pady=6, bg=BG)
     nb.add(sess_frame, text="Sessions")
 
@@ -627,7 +969,7 @@ def run_report(log_path):
     sess_chart_row = tk.Frame(sess_frame, bg=BG)
     sess_chart_row.pack(fill="x", pady=(6, 0))
     tk.Label(sess_chart_row, text="Compare by:", font=FONT_SMALL,
-             bg=BG).pack(side="left")
+             bg=BG, fg=INK).pack(side="left")
     SESS_METRICS = (("Avg combat DPS", "avg_dps"),
                     ("Kills per hour", "kph"),
                     ("Total damage", "dmg"),
@@ -713,84 +1055,40 @@ def run_report(log_path):
         if 0 <= idx < len(state["sessions"]):
             session_box.current(idx)
             refresh()
-            nb.select(overview)
+            nb.select(dash_outer)
 
     sess_tree.bind("<Double-Button-1>", open_session_row)
 
-    # -- Stance / Invocation tab ----------------------------------------------------
-    combo_frame = tk.Frame(nb, padx=12, pady=12, bg=BG)
-    nb.add(combo_frame, text="Stance / Invocation")
-    tk.Label(combo_frame, text="Stances (known effects from eqlwiki.com)",
-             font=FONT_BOLD, bg=BG).pack(anchor="w")
-    stance_tree = ttk.Treeview(combo_frame,
-                               columns=("fights", "dps", "dtps", "effect"),
-                               show="tree headings", height=4)
-    for col, label, w in (("fights", "Fights", 60), ("dps", "Avg DPS", 90),
-                          ("dtps", "Avg DTPS", 90), ("effect", "Known effect", 320)):
-        stance_tree.heading(col, text=label)
-        stance_tree.column(col, width=w, anchor="w" if col == "effect" else "center")
-    stance_tree.column("#0", width=150)
-    stance_tree.heading("#0", text="Stance")
-    stance_tree.pack(fill="x", pady=(2, 12))
-    setup_stripes(stance_tree)
+    # ==========================================================================
+    # Diagnostics tab -- passive healing estimates + unrecognized lines
+    # ==========================================================================
+    diag_frame = tk.Frame(nb, bg=BG, padx=8, pady=6)
+    nb.add(diag_frame, text="Diagnostics")
 
-    tk.Label(combo_frame, text="Invocations (known effects from eqlwiki.com)",
-             font=FONT_BOLD, bg=BG).pack(anchor="w")
-    invoc_tree = ttk.Treeview(combo_frame,
-                              columns=("fights", "dps", "dtps", "effect"),
-                              show="tree headings", height=4)
-    for col, label, w in (("fights", "Fights", 60), ("dps", "Avg DPS", 90),
-                          ("dtps", "Avg DTPS", 90), ("effect", "Known effect", 320)):
-        invoc_tree.heading(col, text=label)
-        invoc_tree.column(col, width=w, anchor="w" if col == "effect" else "center")
-    invoc_tree.column("#0", width=150)
-    invoc_tree.heading("#0", text="Invocation")
-    invoc_tree.pack(fill="x", pady=(2, 4))
-    setup_stripes(invoc_tree)
-
-    tk.Label(combo_frame,
-             text="Grouped by whichever Stance/Invocation was active when each "
-                  "fight started, averaged across all completed fights in that "
-                  "bucket (rates use ACTIVE combat time). More fights = a more "
-                  "trustworthy number.",
-             wraplength=760, justify="left", font=FONT_SMALL, fg=SUBTLE,
-             bg=BG).pack(anchor="w", pady=(8, 0))
-
-    # -- Spell casts tab --------------------------------------------------------------
-    casts_frame = tk.Frame(nb, bg=BG)
-    nb.add(casts_frame, text="Spells Cast")
-    casts_tree = ttk.Treeview(casts_frame,
-                              columns=("count", "mana", "cast", "recast"),
-                              show="tree headings")
-    for col, label, w in (("count", "Casts", 60), ("mana", "Mana", 70),
-                          ("cast", "Cast Time", 80), ("recast", "Recast", 80)):
-        casts_tree.heading(col, text=label)
-        casts_tree.column(col, width=w, anchor="center")
-    casts_tree.column("#0", width=220)
-    casts_tree.heading("#0", text="Spell")
-    casts_tree.pack(fill="both", expand=True, padx=4, pady=4)
-    setup_stripes(casts_tree)
-
-    # -- Passive Healing (estimate) tab -----------------------------------------------
-    heal_est_frame = tk.Frame(nb, padx=12, pady=12, bg=BG)
-    nb.add(heal_est_frame, text="Passive Healing (est.)")
-
-    heal_est_controls = tk.Frame(heal_est_frame, bg=BG)
+    tk.Label(diag_frame, text="Passive Healing (est.)", font=FONT_TITLE,
+             bg=BG, fg=INK, anchor="w").pack(fill="x")
+    heal_est_controls = tk.Frame(diag_frame, bg=BG, pady=2)
     heal_est_controls.pack(fill="x")
-    tk.Label(heal_est_controls, text="Class:", bg=BG).pack(side="left")
+    tk.Label(heal_est_controls, text="Class:", bg=BG, fg=INK,
+             font=FONT).pack(side="left")
     heal_class_var = tk.StringVar(value="Bard")
-    heal_class_menu = ttk.Combobox(heal_est_controls, textvariable=heal_class_var,
-                                   values=CLASS_NAMES, state="readonly", width=14)
+    heal_class_menu = ttk.Combobox(heal_est_controls,
+                                   textvariable=heal_class_var,
+                                   values=CLASS_NAMES, state="readonly",
+                                   width=14)
     heal_class_menu.pack(side="left", padx=(4, 12))
-    tk.Label(heal_est_controls, text="Caster level:", bg=BG).pack(side="left")
+    tk.Label(heal_est_controls, text="Caster level:", bg=BG, fg=INK,
+             font=FONT).pack(side="left")
     heal_level_var = tk.StringVar(value="50")
-    heal_level_entry = tk.Entry(heal_est_controls, textvariable=heal_level_var,
-                                width=5, font=FONT)
+    heal_level_entry = tk.Entry(heal_est_controls,
+                                textvariable=heal_level_var,
+                                width=5, font=FONT, bg=PANEL, fg=INK,
+                                insertbackground=INK, relief="flat")
     heal_level_entry.pack(side="left", padx=(4, 12))
 
     heal_est_tree = ttk.Treeview(
-        heal_est_frame, columns=("minlvl", "base", "formula", "max", "est"),
-        show="tree headings")
+        diag_frame, columns=("minlvl", "base", "formula", "max", "est"),
+        show="tree headings", height=7)
     for col, label, w in (("minlvl", "Min Lvl", 60), ("base", "Base", 60),
                           ("formula", "Formula", 70), ("max", "Max", 60),
                           ("est", "Est./tick", 90)):
@@ -798,8 +1096,20 @@ def run_report(log_path):
         heal_est_tree.column(col, width=w, anchor="center")
     heal_est_tree.column("#0", width=280)
     heal_est_tree.heading("#0", text="Spell")
-    heal_est_tree.pack(fill="both", expand=True, pady=(8, 0))
+    heal_est_tree.pack(fill="x", pady=(2, 2))
     setup_stripes(heal_est_tree)
+
+    tk.Label(diag_frame,
+             text="Beneficial spells for the selected class with a positive "
+                  "SPA-0 (HP) effect -- candidate heals / heal-over-time "
+                  "songs, pulled straight from spells_us.txt. ESTIMATES from "
+                  "the spell's own base/formula/max data (EQEmu classic-era "
+                  "reference math, not confirmed as EQL's exact behavior); "
+                  "PER-TICK for heal-over-time effects. There's no log line "
+                  "showing which song was active, so cross-check a guess "
+                  "manually.",
+             wraplength=1000, justify="left", font=FONT_SMALL, fg=SUBTLE,
+             bg=BG).pack(anchor="w", pady=(0, 8))
 
     def refresh_heal_estimates(*_ignored):
         heal_est_tree.delete(*heal_est_tree.get_children())
@@ -818,27 +1128,14 @@ def run_report(log_path):
 
     heal_class_menu.bind("<<ComboboxSelected>>", refresh_heal_estimates)
     heal_level_entry.bind("<Return>", refresh_heal_estimates)
-    tk.Button(heal_est_controls, text="Refresh",
-              command=refresh_heal_estimates).pack(side="left")
+    themed_button(heal_est_controls, text="Refresh",
+                  command=refresh_heal_estimates).pack(side="left")
 
-    tk.Label(heal_est_frame,
-             text="Beneficial spells for the selected class with a positive "
-                  "SPA-0 (HP) effect -- candidate heals / heal-over-time "
-                  "songs, pulled straight from spells_us.txt. ESTIMATES from "
-                  "the spell's own base/formula/max data (EQEmu classic-era "
-                  "reference math, not confirmed as EQL's exact behavior); "
-                  "PER-TICK for heal-over-time effects. There's no log line "
-                  "showing which song was active, so cross-check a guess "
-                  "manually.",
-             wraplength=760, justify="left", font=FONT_SMALL, fg=SUBTLE,
-             bg=BG).pack(anchor="w", pady=(10, 0))
-
-    # -- Calibration tab -----------------------------------------------------------
-    calib_frame = tk.Frame(nb, bg=BG)
-    nb.add(calib_frame, text="Unrecognized lines")
-    calib_txt = tk.Text(calib_frame, wrap="none", bg=PANEL, fg=INK,
-                        font=FONT_MONO, relief="flat")
-    calib_txt.pack(fill="both", expand=True, padx=4, pady=4)
+    tk.Label(diag_frame, text="Unrecognized lines (parser calibration)",
+             font=FONT_TITLE, bg=BG, fg=INK, anchor="w").pack(fill="x")
+    calib_txt = tk.Text(diag_frame, wrap="none", bg=PANEL, fg=INK,
+                        font=FONT_MONO, relief="flat", height=10)
+    calib_txt.pack(fill="both", expand=True, pady=(2, 0))
 
     # -- refresh -----------------------------------------------------------------------
     def refresh():
@@ -849,42 +1146,15 @@ def run_report(log_path):
         tracker = build_tracker(log_path, lines)
         state["tracker"] = tracker
 
-        dmg_total = sum(getattr(tracker, f"{c}_dmg_out") for c in CATEGORIES)
+        # dashboard
+        redraw_cards()
+        redraw_split()
+        redraw_taken()
+        redraw_topdmg()
+        redraw_topheal()
+        redraw_dps()
 
-        def _pct(n):
-            return f" ({round(100*n/dmg_total)}%)" if dmg_total else ""
-
-        top_dmg = [n for n, _s in tracker.ability_rows(kind="dmg")[:3]]
-        top_heal = [n for n, _s in tracker.ability_rows(kind="heal")[:2]]
-        overview_lbl.config(text=(
-            f"Session length:      {_fmt_minutes(tracker.session_elapsed()/60)}"
-            f"        Fights: {tracker.fights_completed}"
-            f"        Avg combat DPS: {tracker.avg_combat_dps():.1f}"
-            f"   DTPS: {tracker.avg_combat_dtps():.1f}\n\n"
-            f"Damage given (total):    {_fmt_num(dmg_total)}\n"
-            f"  Melee:                 {_fmt_num(tracker.melee_dmg_out)}{_pct(tracker.melee_dmg_out)}\n"
-            f"  Skill:                 {_fmt_num(tracker.skill_dmg_out)}{_pct(tracker.skill_dmg_out)}\n"
-            f"  Spell:                 {_fmt_num(tracker.spell_dmg_out)}{_pct(tracker.spell_dmg_out)}\n"
-            f"  Song:                  {_fmt_num(tracker.song_dmg_out)}{_pct(tracker.song_dmg_out)}\n"
-            f"  Dmg Shield:            {_fmt_num(tracker.ds_dmg_out)}{_pct(tracker.ds_dmg_out)}\n"
-            f"  Pet:                   {_fmt_num(tracker.pet_dmg_out)}{_pct(tracker.pet_dmg_out)}\n"
-            f"Top damage:              {', '.join(top_dmg) or '--'}\n\n"
-            f"Physical damage taken:   {_fmt_num(tracker.physical_dmg_in)}\n"
-            f"Spell/Song dmg taken:    {_fmt_num(tracker.spell_dmg_in + tracker.song_dmg_in)}\n"
-            f"Dmg Shield taken:        {_fmt_num(tracker.ds_dmg_in)}\n"
-            f"Damage your pet took:    {_fmt_num(tracker.pet_dmg_in)}\n\n"
-            f"Healing given:           {_fmt_num(tracker.heal_out_total)}"
-            f"{('   (' + ', '.join(top_heal) + ')') if top_heal else ''}\n"
-            f"Healing received:        {_fmt_num(tracker.heal_in_total)}\n\n"
-            f"Kills:                   {len(tracker.kills)}  ({tracker.kills_per_hour():.1f}/hr)\n"
-            f"Deaths:                  {len(tracker.deaths)}\n\n"
-            f"Current Stance:          {tracker.stance or 'unknown'}\n"
-            f"Current Invocation:      {tracker.invocation or 'unknown'}\n"
-        ))
-        draw_split_bar(tracker)
-        refresh_ability_tables()
-        redraw_graph()
-
+        # stance / invocation tables
         stance_tree.delete(*stance_tree.get_children())
         perf = tracker.stance_performance()
         for name in list(STANCES) + [k for k in perf if k not in STANCES]:
@@ -894,6 +1164,8 @@ def run_report(log_path):
             striped_insert(stance_tree, name, (
                 g["fights"], f"{g['avg_dps']:.1f}", f"{g['avg_dtps']:.1f}",
                 STANCES.get(name, "")))
+        stance_hdr.config(
+            text=f"Stances   (current: {tracker.stance or 'unknown'})")
 
         invoc_tree.delete(*invoc_tree.get_children())
         perf = tracker.invocation_performance()
@@ -904,7 +1176,11 @@ def run_report(log_path):
             striped_insert(invoc_tree, name, (
                 g["fights"], f"{g['avg_dps']:.1f}", f"{g['avg_dtps']:.1f}",
                 INVOCATIONS.get(name, "")))
+        invoc_hdr.config(
+            text=f"Invocations   (current: {tracker.invocation or 'unknown'})")
 
+        # abilities tab
+        refresh_ability_tables()
         casts_tree.delete(*casts_tree.get_children())
         for name, count in sorted(tracker.spell_casts.items(),
                                   key=lambda kv: -kv[1]):
@@ -914,6 +1190,7 @@ def run_report(log_path):
             recast = f"{info.recast_time_s}s" if info else ""
             striped_insert(casts_tree, name, (count, mana, cast, recast))
 
+        # diagnostics tab
         calib_txt.configure(state="normal")
         calib_txt.delete("1.0", "end")
         if tracker.unmatched:
@@ -935,6 +1212,7 @@ def run_report(log_path):
                        ("Text files", "*.txt"), ("All files", "*.*")])
         if chosen and os.path.isfile(chosen):
             log_path = chosen
+            ctx["log_path"] = chosen   # survives a theme-change rebuild
             path_lbl.config(text=log_path)
             root.title(f"EQL Session Report -- "
                        f"{char_name_from(log_path) or 'Unknown'}")
@@ -952,14 +1230,14 @@ def run_report(log_path):
         refresh()
 
     session_box.bind("<<ComboboxSelected>>", lambda e: refresh())
-    tk.Button(top, text="Change log...", command=change_log).pack(
-        side="right", padx=(6, 0))
-    tk.Button(top, text="Refresh", command=refresh_full).pack(side="right")
+    change_btn.config(command=change_log)
+    refresh_btn.config(command=refresh_full)
 
     reload_session_list()
     refresh()
     refresh_heal_estimates()
     root.mainloop()
+    return restart["flag"]
 
 
 def main():
