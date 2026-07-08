@@ -57,6 +57,12 @@ as a plain dark palette). Pick a theme from each applet's right-click menu
 
 ## In-game setup (Friends Overlay)
 
+**Before anything else, turn on logging:** type `/log on` in any in-game
+chat window. This is what makes the game write `eqlog_<Name>_<Server>.txt`
+in the first place — every tool in this suite reads that file, so nothing
+here works until logging is on. Logs are written to your EverQuest Legends
+install's `Logs` folder.
+
 The Friends Overlay reads `/who` and friend-list output from the game's log,
 so it needs a dedicated chat tab plus a macro/hotkey that refreshes that data
 for you automatically.
