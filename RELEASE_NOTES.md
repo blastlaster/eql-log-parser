@@ -1,4 +1,8 @@
-# EQL Log Reader — v1.4 (in progress)
+# EQL Log Reader — v1.4
+
+**Release date:** July 12, 2026
+
+Correctness release for the live BUFFS tracking introduced in v1.3, driven by real play sessions: buffs no longer ghost on the list after death, zoning, or auto-played bard songs (Symphonic Aura), dual-meaning spell messages are disambiguated, and the guessed classic-EQ phrasings for resists/fizzles/interrupts have been replaced with EQL's real ones — now attributed per spell in the Session Report.
 
 ## What's new in v1.4
 
