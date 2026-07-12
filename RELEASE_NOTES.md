@@ -4,6 +4,10 @@
 
 **Text size presets: Elder and Legend.** For eyes that want bigger text: the Friends Overlay and the DPS/HPS Meter gain a right-click **Text size** menu — Standard (100%), **Elder (200%)**, and **Legend (250%)**. Fonts and layout scale together, independently of the existing Size (element footprint) setting, and the choice persists per overlay.
 
+**Horizontal layout: no more clipping.** The bottom stat strips (fight stats, ALL TIME, BUFFS, RESISTED) used to be fixed single lines — a long ALL TIME row (stance + invocation shares) ran off both edges of the canvas. They now wrap onto extra centered lines and the canvas grows to fit, breaking at the natural group boundaries (stats | stance shares | invocation shares) rather than mid-group.
+
+**All timescales, now horizontal too.** The Layout menu offers both orientations of the All-timescales view: the existing vertical column, and a new horizontal strip where each metric column (DMG / HEAL / TAKEN) shows its three clocks side by side — `now/s` (rolling 30s), `1m/m` (last 60s per minute), `cbt/h` (whole Combat per hour). Same 1h–5h Combat timeout and log backfill as the vertical variant.
+
 **Fullscreen note removed.** The old "requires Windowed / Borderless-Windowed mode" caveat was wrong for EQL — the overlays draw fine over the game's fullscreen mode — and is gone from the README and docs.
 
 ---

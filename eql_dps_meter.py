@@ -26,12 +26,13 @@ Right-click the overlay for:
                    (monochrome, no scanlines/bevels, and DMG SOURCES render
                    as plain text rows instead of bars)
   * Layout      -- Vertical (compact column) / Horizontal (wide strip, all
-                   meters side by side) / All timescales (the vertical
-                   column with a 3x3 grid up top: DMG/HEAL/TAKEN rows x
-                   now-per-second (rolling 30s), last-minute (last 60s as
-                   /m), and whole-Combat-per-hour columns; runs on the
-                   per-hour Combat timeout, 1h-5h, and switching into it
-                   backfills the window from the log -- see below)
+                   meters side by side) / All timescales, vertical OR
+                   horizontal (DMG/HEAL/TAKEN x now-per-second (rolling
+                   30s), last-minute (last 60s as /m), and whole-Combat-
+                   per-hour; runs on the per-hour Combat timeout, 1h-5h,
+                   and switching into it backfills the window from the
+                   log -- see below). The horizontal layouts' bottom stat
+                   strips wrap onto extra lines instead of clipping.
   * Rate window -- Fight average (totals over active combat time, steadier)
                    / Rolling 10s / Rolling 30s (what's hitting right now --
                    better reflects bursts, e.g. a big hit no longer gets
@@ -441,10 +442,10 @@ def run_overlay(log_path):
     TIMEOUT_DEFAULTS = {"sec": 45, "min": 60, "hour": 3600}
 
     def unit_mode():
-        # the tri layout shows all three timescales at once; its shared
-        # sections (segments, badge, pet strip) and its Combat timeout
-        # read at the hour scale
-        if settings.get("layout") == "tri":
+        # the All-timescales layouts (vertical "tri", horizontal "tri_h")
+        # show all three scales at once; their shared sections (segments,
+        # badge, pet strip) and their Combat timeout read at the hour scale
+        if settings.get("layout") in ("tri", "tri_h"):
             return "hour"
         u = settings.get("units", "sec")
         return u if u in ("sec", "min", "hour") else "sec"
@@ -1069,6 +1070,11 @@ def run_overlay(log_path):
         # texts tighten instead of shrinking so fonts stay the same. The
         # text-size preset (fs) scales the whole fixed-coordinate grid
         # along with the fonts -- z() maps design coordinates to pixels.
+        # The bottom rows are CENTERED strips that WRAP onto extra lines
+        # when too wide (the canvas grows) -- nothing clips anymore.
+        # Layout "tri_h" is the horizontal All-timescales variant: the big
+        # single readouts become now/s | 1m/m | combat/h triples.
+        tri = settings.get("layout") == "tri_h"
         s = settings.get("scale", 1.0)
         fs = font_scale()
 
@@ -1080,10 +1086,6 @@ def run_overlay(log_path):
             if settings.get("show_buffs", True) else []
         resist_rows = _resist_display_rows(fight, is_live) \
             if settings.get("show_resisted", True) else []
-        h = z(CANVAS_HEIGHT_H) + (z(14) if buff_rows else 0) \
-            + (z(14) if resist_rows else 0)
-        canvas.configure(width=w, height=h)
-        draw_background(w, h)
 
         # is_live means "in Combat right now" -- when idle, everything
         # combat-scoped renders as "--" (session stats still show)
@@ -1093,29 +1095,174 @@ def run_overlay(log_path):
         rates = _rate_targets(tracker, fight, is_live, vals, elapsed)
         for k, v in rates.items():
             get_anim(k)["target"] = v
+        if tri:
+            for k, v in _tri_targets(tracker, vals, elapsed).items():
+                get_anim(k)["target"] = v
+
+        # ---- build the bottom strips FIRST: their wrapped line count
+        #      decides the canvas height ---------------------------------
+        dim, fg, acc, warn = th["dim"], th["fg"], th["accent"], th["warn"]
+        kph = tracker.kills_per_hour()
+        pad = "  " if w < 520 * fs else "      "
+
+        segs = []
+        if is_live:
+            segs += [("acc ", dim), (f"{vals['acc']}%", fg),
+                     ("  crit ", dim), (f"{vals['critpct']}%", fg),
+                     ("  big ", dim), (_fmt_num(vals['biggest']), warn)]
+        else:
+            segs += [("acc --  crit --  big --", dim)]
+        if bool(tracker.pet_names) or tracker.pet_dmg_out > 0 \
+           or tracker.pet_dmg_in > 0:
+            if is_live:
+                pd, pt = get_anim("pet_dps"), get_anim("pet_tps")
+                pd["disp"] += (pd["target"] - pd["disp"]) * BAR_EASE
+                pt["disp"] += (pt["target"] - pt["disp"]) * BAR_EASE
+                u, ut = {"sec": ("dps", "dtps"), "min": ("dpm", "dtpm"),
+                         "hour": ("dph", "dtph")}[unit_mode()]
+                segs += [(f"{pad}pet ", dim),
+                         (f"{fmt_rate(pd['disp'])}{u}", acc), ("/", dim),
+                         (f"{fmt_rate(pt['disp'])}{ut}", warn)]
+            else:
+                segs += [(f"{pad}pet --", dim)]
+        segs += [(f"{pad}kills ", dim), (str(len(tracker.kills)), acc),
+                 (f" ({kph:.1f}/hr)", dim),
+                 (pad, dim), (tracker.stance or "?", acc), (" / ", dim),
+                 (tracker.invocation or "?", fg)]
+        strips = [segs]
+
+        at = live.get("alltime")
+        if at:
+            segs = [("ALL TIME  ", acc),
+                    ("acc ", dim), (f"{at.acc_pct()}%", fg),
+                    ("  crit ", dim), (f"{at.crit_pct()}%", fg),
+                    ("  big ", dim), (_fmt_num(at.data['biggest']), warn),
+                    ("  kills ", dim), (str(at.data['kills']), acc)]
+            for key in ("stance_secs", "invocation_secs"):
+                pcts = at.time_pcts(key)
+                if pcts:
+                    segs.append((pad, dim))
+                    for n, p in pcts[:3]:
+                        segs += [(_abbr(n), fg), (f" {p}% ", dim)]
+            strips.append(segs)
+
+        if buff_rows:
+            segs = [("BUFFS  ", acc)]
+            for lbl, txt in buff_rows:
+                nm = lbl if len(lbl) <= 16 else lbl[:15] + "…"
+                segs += [(nm, fg), (f" {txt}  ", dim)]
+            strips.append(segs)
+
+        if resist_rows:
+            segs = [("RESISTED  ", warn)]
+            for n, t in resist_rows:
+                nm = n if len(n) <= 20 else n[:19] + "…"
+                segs += [(nm, fg), (f" {t}  ", warn)]
+            strips.append(segs)
+
+        def wrap_segs(strip, max_w, size=8):
+            """Wrap a strip into centered lines -- wide strips grow the
+            canvas instead of clipping at its edges. Breaks prefer the
+            standalone pad separators (they delimit logical groups, e.g.
+            stats | stance shares | invocation shares); a group is only
+            split mid-way when it alone exceeds the line."""
+            f = mono(size)
+
+            def width(seq):
+                return sum(f.measure(t) for t, _ in seq)
+
+            groups, g = [], []
+            for seg in strip:
+                if seg[0] == pad and g:   # standalone separator
+                    groups.append(g)
+                    g = []
+                else:
+                    g.append(seg)
+            if g:
+                groups.append(g)
+
+            def start_line(seg):
+                return (seg[0].lstrip(), seg[1])   # no leading pad-space
+
+            def hard_split(seq):
+                out, curl, curw = [], [], 0
+                for seg in seq:
+                    if not curl:
+                        seg = start_line(seg)
+                    sw = f.measure(seg[0])
+                    if curl and curw + sw > max_w:
+                        out.append(curl)
+                        seg = start_line(seg)
+                        curl, curw = [], 0
+                        sw = f.measure(seg[0])
+                    curl.append(seg)
+                    curw += sw
+                if curl:
+                    out.append(curl)
+                return out
+
+            lines, cur = [], []
+            for grp in groups:
+                cand = (cur + [(pad, dim)] + grp) if cur \
+                    else [start_line(grp[0])] + grp[1:]
+                if width(cand) <= max_w:
+                    cur = cand
+                    continue
+                if cur:
+                    lines.append(cur)
+                pieces = hard_split(grp)
+                lines.extend(pieces[:-1])
+                cur = pieces[-1]
+            if cur:
+                lines.append(cur)
+            return lines
+
+        line_groups = [wrap_segs(sg, w - z(16)) for sg in strips]
+        n_lines = sum(len(g) for g in line_groups)
+
+        row_strip = z(15)
+        strips_y0 = z(98)
+        h = strips_y0 + n_lines * row_strip + z(4)
+        canvas.configure(width=w, height=h)
+        draw_background(w, h)
 
         col_w = w // 3
 
-        # Row 1: DPS / HPS / DTPS side by side; melee/spell(/song) split next
-        # to the label for DPS and DTPS
+        # Row 1: DPS / HPS / DTPS side by side. Standard layouts show the
+        # big fight number (+ melee/spell split); tri_h shows the three
+        # timescales per metric: rolling 30s (/s), last 60s (/m), whole
+        # Combat (/h).
         lab_d, lab_h, lab_t, _pd, _pt, unit_sfx = unit_labels()
-        for i, (label, key, color, has_split) in enumerate((
-                (lab_d, "dps", th["accent"], True),
-                (lab_h, "hps", th["fg"], False),
-                (lab_t, "tps", th["warn"], True))):
-            a = get_anim(key)
-            a["disp"] += (a["target"] - a["disp"]) * BAR_EASE
+        metric_cols = ((("DMG" if tri else lab_d), "dps", th["accent"], True),
+                       (("HEAL" if tri else lab_h), "hps", th["fg"], False),
+                       (("TAKEN" if tri else lab_t), "tps", th["warn"], True))
+        for i, (label, key, color, has_split) in enumerate(metric_cols):
             cx = z(10) + i * col_w
             draw_text(cx, z(10), anchor="nw", text=label, fill=th["dim"],
                                font=mono(9, "bold"))
-            if has_split and is_live:
-                draw_text(
-                    cx + z(44), z(11), anchor="nw",
-                    text=_split_text(key, vals, 0),   # always abbreviated
-                    fill=th["dim"], font=mono(7))
-            draw_text(cx, z(24), anchor="nw",
-                               text=fmt_rate(a['disp']) if is_live else "--",
-                               fill=color, font=mono(18, "bold"))
+            if tri:
+                cell = (col_w - z(14)) // 3
+                for j, (sfx, hdr) in enumerate(
+                        (("s", "now/s"), ("m", "1m/m"), ("h", "cbt/h"))):
+                    rx = cx + (j + 1) * cell
+                    draw_text(rx, z(11), anchor="ne", text=hdr,
+                              fill=th["dim"], font=mono(7))
+                    a = get_anim(f"t3_{key}_{sfx}")
+                    a["disp"] += (a["target"] - a["disp"]) * BAR_EASE
+                    draw_text(rx, z(24), anchor="ne",
+                              text=fmt_rate(a["disp"]) if is_live else "--",
+                              fill=color, font=mono(12, "bold"))
+            else:
+                a = get_anim(key)
+                a["disp"] += (a["target"] - a["disp"]) * BAR_EASE
+                if has_split and is_live:
+                    draw_text(
+                        cx + z(44), z(11), anchor="nw",
+                        text=_split_text(key, vals, 0),   # always abbreviated
+                        fill=th["dim"], font=mono(7))
+                draw_text(cx, z(24), anchor="nw",
+                                   text=fmt_rate(a['disp']) if is_live else "--",
+                                   fill=color, font=mono(18, "bold"))
 
         canvas.create_line(6, z(56), w - 6, z(56), fill=th["dim"])
 
@@ -1141,72 +1288,12 @@ def run_overlay(log_path):
             draw_text(cx, z(76), anchor="nw", text=txt,
                                fill=th["fg"], font=mono(9, "bold"))
 
-        # Rows 3-6 are CENTERED strips with colored values (labels dim,
-        # values colored) -- the old single dim left-aligned line was a
-        # wall of text at this density.
-        dim, fg, acc, warn = th["dim"], th["fg"], th["accent"], th["warn"]
-        kph = tracker.kills_per_hour()
-        pad = "  " if w < 520 * fs else "      "
-
-        # Row 3: current-fight stats + pet + kills + stance/invocation
-        if is_live:
-            segs = [("acc ", dim), (f"{vals['acc']}%", fg),
-                    ("  crit ", dim), (f"{vals['critpct']}%", fg),
-                    ("  big ", dim), (_fmt_num(vals['biggest']), warn)]
-        else:
-            segs = [("acc --  crit --  big --", dim)]
-        if bool(tracker.pet_names) or tracker.pet_dmg_out > 0 \
-           or tracker.pet_dmg_in > 0:
-            if is_live:
-                pd, pt = get_anim("pet_dps"), get_anim("pet_tps")
-                pd["disp"] += (pd["target"] - pd["disp"]) * BAR_EASE
-                pt["disp"] += (pt["target"] - pt["disp"]) * BAR_EASE
-                u, ut = {"sec": ("dps", "dtps"), "min": ("dpm", "dtpm"),
-                         "hour": ("dph", "dtph")}[unit_mode()]
-                segs += [(f"{pad}pet ", dim),
-                         (f"{fmt_rate(pd['disp'])}{u}", acc), ("/", dim),
-                         (f"{fmt_rate(pt['disp'])}{ut}", warn)]
-            else:
-                segs += [(f"{pad}pet --", dim)]
-        segs += [(f"{pad}kills ", dim), (str(len(tracker.kills)), acc),
-                 (f" ({kph:.1f}/hr)", dim),
-                 (pad, dim), (tracker.stance or "?", acc), (" / ", dim),
-                 (tracker.invocation or "?", fg)]
-        draw_strip(z(103), w, segs)
-
-        # Row 4: ALL TIME -- lifetime numbers for at-a-glance comparison
-        at = live.get("alltime")
-        if at:
-            segs = [("ALL TIME  ", acc),
-                    ("acc ", dim), (f"{at.acc_pct()}%", fg),
-                    ("  crit ", dim), (f"{at.crit_pct()}%", fg),
-                    ("  big ", dim), (_fmt_num(at.data['biggest']), warn),
-                    ("  kills ", dim), (str(at.data['kills']), acc)]
-            for key in ("stance_secs", "invocation_secs"):
-                pcts = at.time_pcts(key)
-                if pcts:
-                    segs.append((pad, dim))
-                    for n, p in pcts[:3]:
-                        segs += [(_abbr(n), fg), (f" {p}% ", dim)]
-            draw_strip(z(118), w, segs)
-
-        # Row 5: active buffs/debuffs on you, est. countdowns (see
-        # _buff_display_rows for the time-text legend)
-        if buff_rows:
-            segs = [("BUFFS  ", acc)]
-            for lbl, txt in buff_rows:
-                nm = lbl if len(lbl) <= 16 else lbl[:15] + "…"
-                segs += [(nm, fg), (f" {txt}  ", dim)]
-            draw_strip(z(133), w, segs)
-
-        # Row 6: your spells a mob resisted THIS fight (clears with it)
-        if resist_rows:
-            ry = z(133) + (z(14) if buff_rows else 0)
-            segs = [("RESISTED  ", warn)]
-            for n, t in resist_rows:
-                nm = n if len(n) <= 20 else n[:19] + "…"
-                segs += [(nm, fg), (f" {t}  ", warn)]
-            draw_strip(ry, w, segs)
+        # Rows 3+: the centered, colored, WRAPPING strips built above
+        y = strips_y0 + row_strip // 2
+        for group in line_groups:
+            for line in group:
+                draw_strip(y, w, line)
+                y += row_strip
 
     prev_state = {"live": False}
 
@@ -1226,7 +1313,7 @@ def run_overlay(log_path):
         prev_state["live"] = in_combat
 
         canvas.delete("all")
-        if settings.get("layout", "vertical") == "horizontal":
+        if settings.get("layout", "vertical") in ("horizontal", "tri_h"):
             render_horizontal(th, tracker, fight, in_combat)
         else:
             # "vertical" and "tri" share the column renderer -- tri swaps
@@ -1381,7 +1468,8 @@ def run_overlay(log_path):
         layout_menu = tk.Menu(m, tearoff=0)
         for key, label in (("vertical", "Vertical (Recommended)"),
                            ("horizontal", "Horizontal"),
-                           ("tri", "All timescales (s · m · h)")):
+                           ("tri", "All timescales — vertical"),
+                           ("tri_h", "All timescales — horizontal")):
             mark = "● " if settings.get("layout", "vertical") == key else "   "
             layout_menu.add_command(label=mark + label,
                                     command=lambda k=key: set_layout(k))
