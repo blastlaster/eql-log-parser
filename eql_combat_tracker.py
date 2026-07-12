@@ -130,7 +130,7 @@ import time
 from collections import deque
 from datetime import datetime
 
-from eql_spell_db import SPELL_DB
+from eql_spell_db import SPELL_DB, EQL_LEVEL_CAP
 
 TS_RE = r"\[(?P<ts>[A-Za-z]{3} [A-Za-z]{3} \d{2} \d{2}:\d{2}:\d{2} \d{4})\] "
 TS_ONLY_RE = re.compile(TS_RE)
@@ -686,6 +686,7 @@ class CombatTracker:
         self.active_buffs = {}       # label -> wall time it landed
         self._active_buff_cands = {}  # label -> set of candidate spell names
         self._buff_self_expiry = {}  # label -> estimated end, SELF-cast only
+        self._buff_worst_end = {}    # label -> latest possible end (L50 caster)
         self.buff_gains = {}         # label -> times gained this session
         self.buff_fades = {}         # label -> times faded this session
         self.buff_uptime = {}        # label -> completed-stretch seconds
@@ -1028,10 +1029,31 @@ class CombatTracker:
             return None
         return start + dur
 
+    def _worst_case_end(self, label, start):
+        """Latest moment ANY candidate reading of this buff could still be
+        active, assuming a level-50 caster (EQL's cap). None when
+        unknowable (a candidate is missing from the spell file or
+        permanent) -- those entries only close on a fade line, death, or
+        zone. Lets debuffs whose ending is never logged ("You feel your
+        skin freeze.") drop off instead of clogging the BUFFS list."""
+        names = [label] if not label.startswith('"') \
+            else self._active_buff_cands.get(label) or ()
+        worst = 0
+        for n in names:
+            info = SPELL_DB.lookup(n)
+            if info is None:
+                return None
+            dur = info.duration_seconds(EQL_LEVEL_CAP)
+            if dur == -1:
+                return None
+            worst = max(worst, dur)
+        return start + worst if worst > 0 else None
+
     def _close_buff(self, label, wall_time):
         start = self.active_buffs.pop(label, None)
         self._active_buff_cands.pop(label, None)
         self._buff_self_expiry.pop(label, None)
+        self._buff_worst_end.pop(label, None)
         if start is not None:
             self.buff_uptime[label] = \
                 self.buff_uptime.get(label, 0.0) + max(wall_time - start, 0.0)
@@ -1126,7 +1148,12 @@ class CombatTracker:
             if could_fade:
                 landed = None
             else:
-                faded = None
+                # Nothing active matches the fade reading -- but that does
+                # NOT make it a landing: Selo's "You slow down." wear-off
+                # can print after zoning has already stripped the song's
+                # entry. Which meaning is right is unknowable, and tracking
+                # a possibly-phantom debuff clogs the BUFFS list -- drop it.
+                return True
         if landed:
             label = self._resolve_buff_label(landed, wall_time) \
                 or f'"{body.strip()}"'
@@ -1156,8 +1183,16 @@ class CombatTracker:
             if pending and pending[0] == label and dur and dur > 0 \
                and pending[1] + self.BUFF_CAST_SLACK >= wall_time:
                 self._buff_self_expiry[label] = wall_time + dur
+                self._buff_worst_end.pop(label, None)
             else:
                 self._buff_self_expiry.pop(label, None)
+                # not provably yours -- cap it at the longest any candidate
+                # could run for a max-level caster (see _worst_case_end)
+                end = self._worst_case_end(label, wall_time)
+                if end is not None:
+                    self._buff_worst_end[label] = end
+                else:
+                    self._buff_worst_end.pop(label, None)
             self.buff_gains[label] = self.buff_gains.get(label, 0) + 1
             self.buff_events.append((wall_time, label, "gained"))
             self._notify()
@@ -1274,12 +1309,15 @@ class CombatTracker:
             self.session_start_wall = wall_time
         self._last_line_wall = max(self._last_line_wall, wall_time)
 
-        # sweep expired SELF-cast buffs (their estimated end is reliable --
-        # you are the caster). 2s of slack absorbs timestamp rounding; the
-        # uptime stretch banks at the estimated end, not the sweep moment.
-        if self._buff_self_expiry:
-            for lbl, end in list(self._buff_self_expiry.items()):
-                if wall_time > end + 2.0:
+        # sweep expired buffs. SELF-cast ends are reliable (you are the
+        # caster; 2s of slack absorbs timestamp rounding); everything else
+        # closes only past its WORST-CASE end -- the longest any candidate
+        # could run for a level-50 caster, plus a tick of slack. Uptime
+        # banks at the estimated end, not the sweep moment.
+        for src, grace in ((self._buff_self_expiry, 2.0),
+                           (self._buff_worst_end, 6.0)):
+            for lbl, end in list(src.items()):
+                if wall_time > end + grace:
                     self._close_buff(lbl, end)
                     self.buff_events.append((end, lbl, "faded"))
                     self._notify()
