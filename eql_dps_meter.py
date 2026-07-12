@@ -339,6 +339,19 @@ def _buff_display_rows(tracker, max_rows=6):
     return [(lbl, txt) for _, lbl, txt in rows[:max_rows]]
 
 
+def _resist_display_rows(fight, is_live, max_rows=4):
+    """(spell, 'xN') for YOUR spells/songs a mob resisted DURING the
+    current fight, most-resisted first. Empty when idle -- the tally
+    clears with the fight, so it's a live nudge that an ability isn't
+    landing on THIS enemy and needs swapping (lifetime counts stay in the
+    Session Report's Resisted column)."""
+    if not (is_live and fight and fight.spell_resists):
+        return []
+    rows = sorted(fight.spell_resists.items(),
+                  key=lambda kv: (-kv[1], kv[0]))
+    return [(name, f"x{n}") for name, n in rows[:max_rows]]
+
+
 def _contrast_on(color, th):
     """A text color readable ON a bar filled with `color`: something dark
     over bright bars, the theme's (bright) fg over dark bars. Transparent
@@ -379,6 +392,8 @@ def run_overlay(log_path):
         "seg_show_amount": False,
         # BUFFS block: active buffs/debuffs on you with estimated countdowns
         "show_buffs": True,
+        # RESISTED block: per-fight tally of your spells a mob resisted
+        "show_resisted": True,
         "scale": 1.0,   # element size; fonts stay constant (see SIZE_STEPS)
     })
 
@@ -689,9 +704,12 @@ def run_overlay(log_path):
                          + (1 if at.time_pcts("invocation_secs") else 0)
         buff_rows = _buff_display_rows(tracker) \
             if settings.get("show_buffs", True) else []
+        resist_rows = _resist_display_rows(fight, is_live) \
+            if settings.get("show_resisted", True) else []
         h = (gap + 3 * row_big + 2 * row_sub
              + (2 * row_pet if has_pet else 0) + gap + gap
              + len(SEGMENTS) * row_seg + 4
+             + ((2 * gap + len(resist_rows) * row_ft + 4) if resist_rows else 0)
              + ((2 * gap + len(buff_rows) * row_ft + 4) if buff_rows else 0)
              + gap + (3 + at_lines) * row_ft + 4)
         canvas.configure(width=w, height=h)
@@ -768,6 +786,24 @@ def run_overlay(log_path):
                                       rate_txt=rate_txt)
             y += row_seg
         y += 4
+
+        # -- your spells a mob resisted THIS fight -- a live nudge that an
+        #    ability isn't landing on this enemy; clears with the fight ------
+        if resist_rows:
+            canvas.create_line(8, y, w - 8, y, fill=th["dim"])
+            y += gap
+            draw_text(w // 2, y, text="— RESISTED —",
+                      fill=th["warn"], font=mono(9, "bold"))
+            y += gap
+            maxch = max(10, (w - 50) // 6)
+            for name, txt in resist_rows:
+                nm = name if len(name) <= maxch else name[:maxch - 1] + "…"
+                draw_text(8, y, anchor="w", text=nm, fill=th["fg"],
+                          font=mono(8))
+                draw_text(w - 8, y, anchor="e", text=txt, fill=th["warn"],
+                          font=mono(8))
+                y += row_ft
+            y += 4
 
         # -- active buffs/debuffs on you, est. countdowns (see
         #    _buff_display_rows for the time-text legend) --------------------
@@ -847,7 +883,10 @@ def run_overlay(log_path):
         w = max(380, int(CANVAS_WIDTH_H * s))
         buff_rows = _buff_display_rows(tracker) \
             if settings.get("show_buffs", True) else []
-        h = CANVAS_HEIGHT_H + (14 if buff_rows else 0)
+        resist_rows = _resist_display_rows(fight, is_live) \
+            if settings.get("show_resisted", True) else []
+        h = CANVAS_HEIGHT_H + (14 if buff_rows else 0) \
+            + (14 if resist_rows else 0)
         canvas.configure(width=w, height=h)
         draw_background(w, h)
 
@@ -967,6 +1006,18 @@ def run_overlay(log_path):
             draw_text(14 + mono(8, "bold").measure(bhdr), 128,
                       anchor="nw", text=btxt, fill=th["dim"], font=mono(8))
 
+        # Row 6: your spells a mob resisted THIS fight (clears with it)
+        if resist_rows:
+            ry = 128 + (14 if buff_rows else 0)
+            rhdr = "RESISTED"
+            draw_text(10, ry, anchor="nw", text=rhdr,
+                      fill=th["warn"], font=mono(8, "bold"))
+            rtxt = "  ".join(
+                (n if len(n) <= 20 else n[:19] + "…") + f" {t}"
+                for n, t in resist_rows)
+            draw_text(14 + mono(8, "bold").measure(rhdr), ry,
+                      anchor="nw", text=rtxt, fill=th["dim"], font=mono(8))
+
     prev_state = {"live": False}
 
     def render():
@@ -1044,6 +1095,10 @@ def run_overlay(log_path):
 
     def set_show_buffs(v):
         settings["show_buffs"] = v
+        settings.save()
+
+    def set_show_resisted(v):
+        settings["show_resisted"] = v
         settings.save()
 
     def quit_app():
@@ -1174,6 +1229,10 @@ def run_overlay(log_path):
         m.add_command(
             label=("● " if cur_b else "   ") + "Show active buffs",
             command=lambda: set_show_buffs(not cur_b))
+        cur_r = settings.get("show_resisted", True)
+        m.add_command(
+            label=("● " if cur_r else "   ") + "Show resisted (per fight)",
+            command=lambda: set_show_resisted(not cur_r))
         m.add_command(label="Reset current fight", command=reset_fight)
         _report_sibling = "eql_session_report.exe" if getattr(sys, "frozen", False) \
             else "eql_session_report.py"

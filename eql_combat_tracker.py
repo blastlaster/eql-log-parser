@@ -542,6 +542,9 @@ class Fight:
         self.actors = {}   # name -> stat dict
         self.stance = None
         self.invocation = None
+        # spell -> times a mob resisted it DURING this fight (the meter's
+        # RESISTED block; session-wide counts live on the tracker)
+        self.spell_resists = {}
 
     def actor(self, name):
         return self.actors.setdefault(name, _blank_actor())
@@ -1408,6 +1411,11 @@ class CombatTracker:
         if m:
             spell = m.group("spell")
             self.spell_resists[spell] = self.spell_resists.get(spell, 0) + 1
+            if self.current is not None:
+                # per-fight tally for the meter's RESISTED block; resists
+                # don't start or extend a Combat, same as misses/casts
+                self.current.spell_resists[spell] = \
+                    self.current.spell_resists.get(spell, 0) + 1
             self._notify()
             return
         if RESIST_IN_RE.match(line) or RESIST_IN_CLASSIC_RE.match(line):
