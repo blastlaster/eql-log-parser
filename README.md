@@ -78,7 +78,10 @@ for you automatically.
 2. Route all `/who` messages and "Other" messages to that tab.
 3. Turn off highlighting on new messages for that tab, so it doesn't flash/alert.
 4. Press `L` to open Socials.
-5. Create a new macro: `/friend | /who friend all | /pet who leader`.
+5. Create a new macro: `/friend | /who friend all | /pet who leader | /pause 60 | /who`.
+   (The trailing `/pause 60 | /who` runs a plain `/who` six seconds later —
+   that's what reveals your own level to the log, which the duration
+   estimates scale by.)
 6. Place the macro in the last slot of your main hotbar (slot 12) — any slot
    works, this is just what the rest of these steps assume.
 7. Press `Alt+O` to open Settings, then go to Controls > Hotbar 1 > Button 12
@@ -118,10 +121,10 @@ by the EQL Spell Explorer project (github.com/Amerzel/eql-info).
 The spell-data features read `spells_us.txt` / `spells_us_str.txt` from
 your EQL install (found automatically); without them those features
 quietly degrade while combat parsing works as normal. Duration estimates
-scale by your character level once the log reveals it — run a plain
-`/who` once per session to pin it (the Friends Overlay macro's
-`/who friend all` does not include yourself); until then estimates
-assume L50.
+scale by your character level once the log reveals it via a plain `/who`
+(`/who friend all` alone does not include yourself — the recommended
+macro above ends with `/pause 60 | /who` precisely so firing it pins
+your level automatically); until then estimates assume L50.
 
 Settings, rosters, personal records, and all-time stats are stored as JSON
 files next to the scripts and are intentionally not part of this
