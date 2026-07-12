@@ -166,7 +166,9 @@ ACTIVE_GAP_CAP = 10.0       # a gap between damage events counts toward active
                             # < IDLE_TIMEOUT) must not dilute DPS. Real swing
                             # gaps cluster at 1-7s, so this never clips
                             # ordinary weapon delay or short miss streaks.
-ROLLING_MAX_WINDOW = 30.0   # largest rolling-rate window the meter offers
+ROLLING_MAX_WINDOW = 60.0   # largest rolling-rate window the meter offers
+                            # (30s picker windows, plus the tri layout's
+                            # last-60s per-minute column)
 MAX_FIGHT_HISTORY = 20
 MAX_UNMATCHED = 200
 CRIT_WINDOW = 2.0           # seconds a "critical hit" announcement stays live

@@ -504,6 +504,9 @@ def run_overlay(log_path):
         "compact": False,
         "who_window": False,        # pipe /who searches to their own window
         "who_x": 340, "who_y": 40,
+        # collapsed /who window: only the title bar shows (it carries the
+        # player count and the time of the last /who pull)
+        "who_min": False,
         # element size (1.0/0.9/0.8/0.7/0.6): shrinks paddings and spacing;
         # FONTS STAY THE SAME so the data stays readable. Text height sets
         # the floor, so most of the gain is in margins and row spacing.
@@ -644,7 +647,31 @@ def run_overlay(log_path):
         close.bind("<Enter>", lambda e: close.config(fg=FG))
         close.bind("<Leave>", lambda e: close.config(fg=DIM))
         wbody = tk.Canvas(top, bg=BG, highlightthickness=0)
-        wbody.pack(fill="both", expand=True, padx=sc(6), pady=(sc(2), sc(6)))
+
+        # minimize: collapse to just the title bar -- it already carries
+        # the player count and the last-pull time ("WHO (12)  09:41:33")
+        minb = tk.Label(wbar, bg=PANEL, fg=DIM, font=title_font,
+                        cursor="hand2")
+
+        def apply_who_min():
+            if settings.get("who_min", False):
+                wbody.pack_forget()
+                minb.config(text=" □ ")
+            else:
+                wbody.pack(fill="both", expand=True, padx=sc(6),
+                           pady=(sc(2), sc(6)))
+                minb.config(text=" – ")
+
+        def toggle_who_min(e=None):
+            settings["who_min"] = not settings.get("who_min", False)
+            apply_who_min()
+            save_settings()
+
+        minb.pack(side="right")
+        minb.bind("<Button-1>", toggle_who_min)
+        minb.bind("<Enter>", lambda e: minb.config(fg=FG))
+        minb.bind("<Leave>", lambda e: minb.config(fg=DIM))
+        apply_who_min()
 
         wdrag = {"x": 0, "y": 0}
 
