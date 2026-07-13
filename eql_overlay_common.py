@@ -16,6 +16,8 @@ Contents:
 
 import json
 import os
+import shutil
+import sys
 
 POLL_INTERVAL_MS = 250      # how often overlays should re-check the log
 SEED_BYTES = 512 * 1024     # how much of the log tail to parse on startup
@@ -92,6 +94,59 @@ class LogWatcher:
         line = raw.decode("cp1252", errors="replace").rstrip("\r")
         for fn in self.handlers:
             fn(line)
+
+
+# ----------------------------------------------------------------------------
+# Per-user data files (settings, rosters, records, all-time stats)
+# ----------------------------------------------------------------------------
+def data_path(filename, script_dir):
+    """Resolve where a per-user data file lives.
+
+    Running from SOURCE: next to the scripts, as always (dev workflow).
+    FROZEN (installed) builds: %APPDATA%\\EQL Log Reader -- the exe sits in
+    Program Files, where writes fail (or get UAC-virtualized) for normal
+    users and don't survive uninstall/reinstall cycles. A file found only
+    next to the exe (older builds wrote there when they could) is migrated
+    once, so nobody loses their settings/records on update."""
+    if not getattr(sys, "frozen", False):
+        return os.path.join(script_dir, filename)
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    d = os.path.join(base, "EQL Log Reader")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except OSError:
+        return os.path.join(script_dir, filename)
+    new = os.path.join(d, filename)
+    old = os.path.join(script_dir, filename)
+    if not os.path.exists(new) and os.path.exists(old):
+        try:
+            shutil.copy2(old, new)
+        except OSError:
+            pass
+    return new
+
+
+def install_tk_error_logger(root, tool_name, log_path):
+    """Make Tk callback exceptions non-fatal in windowed builds.
+
+    A no-console (windowed) exe has sys.stderr = None, so Tk's DEFAULT
+    callback-exception reporter -- which prints the traceback -- itself
+    raises, and that secondary failure can abort the mainloop: one buggy
+    callback kills the whole overlay with no trace. Replace it with a
+    reporter that appends the traceback to a log file and keeps running."""
+    import time
+    import traceback
+
+    def report(exc, val, tb):
+        try:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+                        f"{tool_name}: exception in a Tk callback\n")
+                traceback.print_exception(exc, val, tb, file=f)
+        except OSError:
+            pass
+
+    root.report_callback_exception = report
 
 
 # ----------------------------------------------------------------------------

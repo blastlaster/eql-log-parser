@@ -89,14 +89,17 @@ from eql_combat_tracker import (
     CombatTracker, YOU_LABEL, PET_LABEL, STANCES, INVOCATIONS,
     CATEGORY_LABELS, CATEGORIES,
 )
-from eql_overlay_common import Settings, RETRO_THEMES, DEFAULT_THEME, get_theme
+from eql_overlay_common import (Settings, RETRO_THEMES, DEFAULT_THEME,
+                                get_theme, data_path,
+                                install_tk_error_logger)
 from eql_spell_db import SPELL_DB, CLASS_NAMES
 
 if getattr(sys, "frozen", False):
     APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
-SETTINGS_FILE = os.path.join(APP_DIR, "eql_session_report_settings.json")
+SETTINGS_FILE = data_path("eql_session_report_settings.json", APP_DIR)
+ERROR_LOG = data_path("eql_errors.log", APP_DIR)
 
 SESSION_MARK = "Welcome to EverQuest Legends!"
 ZONE_RE = re.compile(r"You have entered (.+)\.")
@@ -660,6 +663,7 @@ def _report_window(ctx, settings):
     restart = {"flag": False}
 
     root = tk.Tk()
+    install_tk_error_logger(root, "eql_session_report", ERROR_LOG)
     root.title(f"EQL Session Report -- {char_name_from(log_path) or 'Unknown'}")
     root.geometry(ctx["geometry"])
     root.configure(bg=BG)

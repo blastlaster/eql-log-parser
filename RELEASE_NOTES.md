@@ -16,6 +16,10 @@ The Fight Summary grows up: the post-fight popup introduced in v1.5 becomes a fu
 
 **Fight Summary: own theme + Neon HUD transparency.** Right-click the popup for its own theme, saved separately (defaults to matching the meter). The body renders with the suite's outlined-text treatment over a chroma-keyed background — true Neon HUD transparency, exactly like the meter and Friends overlay — with the title/nav/filter bars keeping their panel color as the grab handle.
 
+**Settings survive reinstalls.** Installed builds used to write settings, rosters, personal records, and all-time stats *next to the EXE* — inside Program Files, where writes fail (or get virtualized) for normal users and vanish across install cycles. All per-user data now lives in `%APPDATA%\EQL Log Reader`; anything found next to the EXE from an older install is migrated automatically on first run, so nothing resets when you update.
+
+**Windowed builds no longer die on a UI error — and leave evidence.** A no-console EXE has no stderr, so an error inside any UI callback (the kind a source run just prints and shrugs off) could take down the whole overlay — this is what made choosing the Neon HUD theme on the Fight Summary crash the installed build (the theme menu's parent window was destroyed mid-click; fixed too: the menu now belongs to the meter and the rebuild is deferred past the click). Every tool now logs callback errors to `%APPDATA%\EQL Log Reader\eql_errors.log` and keeps running.
+
 **Log tailing survives transient file locks.** A momentary `PermissionError` on the log (antivirus scan, indexer, backup tool touching the file) could previously kill the polling loop silently — the overlay kept rendering but stopped updating. The watcher now skips the blocked read and retries next tick, and both overlays' poll loops always reschedule.
 
 ---

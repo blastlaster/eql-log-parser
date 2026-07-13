@@ -46,7 +46,8 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 
 from eql_overlay_common import (Settings, RETRO_THEMES, DEFAULT_THEME,
-                                 get_theme, CURRENT_VERSION)
+                                 get_theme, CURRENT_VERSION, data_path,
+                                 install_tk_error_logger)
 from eql_update_check import check_for_update
 
 # The launcher is a normal decorated window, not a borderless overlay, so the
@@ -68,7 +69,8 @@ if getattr(sys, "frozen", False):
     APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
-SETTINGS_FILE = os.path.join(APP_DIR, "eql_launcher_settings.json")
+SETTINGS_FILE = data_path("eql_launcher_settings.json", APP_DIR)
+ERROR_LOG = data_path("eql_errors.log", APP_DIR)
 DEFAULT_INSTALL_DIR = r"C:\Users\Public\Daybreak Game Company\Installed Games"
 
 TOOLS = [
@@ -245,6 +247,7 @@ def main():
     })
 
     root = tk.Tk()
+    install_tk_error_logger(root, "eql_launcher", ERROR_LOG)
     root.title("EQL Log Reader -- Launcher")
     root.resizable(False, False)
 

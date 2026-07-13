@@ -139,7 +139,7 @@ import time
 
 from eql_overlay_common import (
     LogWatcher, Settings, make_draggable, RETRO_THEMES, DEFAULT_THEME,
-    get_theme,
+    get_theme, data_path, install_tk_error_logger,
     POLL_INTERVAL_MS, SEED_BYTES, luma as _luma,
 )
 from eql_combat_tracker import (CombatTracker, YOU_LABEL, PET_LABEL,
@@ -161,7 +161,8 @@ if getattr(sys, "frozen", False):
     APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
-SETTINGS_FILE = os.path.join(APP_DIR, "eql_dps_meter_settings.json")
+SETTINGS_FILE = data_path("eql_dps_meter_settings.json", APP_DIR)
+ERROR_LOG = data_path("eql_errors.log", APP_DIR)
 
 # Damage-source segment display order/colors are keyed to theme roles shared
 # with the main DPS/HPS/DTPS readout (accent/fg/warn/bad/dim) to keep the
@@ -211,7 +212,7 @@ class AllTimeStore:
         base = os.path.splitext(os.path.basename(log_path))[0]
         if base.startswith("eqlog_"):
             base = base[len("eqlog_"):]
-        self.path = os.path.join(APP_DIR, f"eql_alltime_{base}.json")
+        self.path = data_path(f"eql_alltime_{base}.json", APP_DIR)
         self.data = {"hits": 0, "misses": 0, "crits": 0, "kills": 0,
                      "deaths": 0, "biggest": 0, "combat_secs": 0.0,
                      "stance_secs": {}, "invocation_secs": {}}
@@ -485,6 +486,7 @@ def run_overlay(log_path):
         return ("DPS", "HPS", "DTPS", "PET DPS", "PET DTPS", "/s")
 
     root = tk.Tk()
+    install_tk_error_logger(root, "eql_dps_meter", ERROR_LOG)
     root.title("EQL Combat")
     root.overrideredirect(True)
     root.attributes("-topmost", True)
@@ -582,21 +584,31 @@ def run_overlay(log_path):
         if on and fpop["flash_job"] is None:
             _fp_flash_tick()
 
+    def _fp_rebuild():
+        top = fpop["top"]
+        if top is None or not top.winfo_exists():
+            return
+        visible = top.state() != "withdrawn"
+        top.destroy()
+        fpop.update(top=None, body=None, filter_var=None, counter=None,
+                    btn_last=None)
+        if visible and fpop["idx"] >= 0:
+            _fp_ensure()
+            _fp_fill()
+            fpop["top"].deiconify()
+
     def set_fp_theme(key):
         settings["fight_popup_theme"] = key or ""
         settings.save()
-        top = fpop["top"]
-        if top is not None and top.winfo_exists():
-            visible = top.state() != "withdrawn"
-            top.destroy()
-            fpop.update(top=None, body=None, filter_var=None, counter=None)
-            if visible and fpop["idx"] >= 0:
-                _fp_ensure()
-                _fp_fill()
-                fpop["top"].deiconify()
+        # rebuild AFTER the menu callback unwinds: destroying the menu's
+        # window mid-callback raises a TclError, which in a windowed exe
+        # (sys.stderr is None) aborted the whole app
+        root.after(10, _fp_rebuild)
 
     def _fp_menu(e):
-        m = tk.Menu(fpop["top"], tearoff=0)
+        # parented to ROOT (never to the popup: theme changes destroy the
+        # popup, and a menu must outlive its own callback)
+        m = tk.Menu(root, tearoff=0)
         thm = tk.Menu(m, tearoff=0)
         cur = settings.get("fight_popup_theme") or ""
         thm.add_command(label=("● " if not cur else "   ")
@@ -608,7 +620,10 @@ def run_overlay(log_path):
                             command=lambda k=key: set_fp_theme(k))
         m.add_cascade(label="Theme", menu=thm)
         m.add_command(label="Close", command=_fp_close)
-        m.tk_popup(e.x_root, e.y_root)
+        try:
+            m.tk_popup(e.x_root, e.y_root)
+        finally:
+            m.grab_release()
 
     def _fp_ensure():
         if fpop["top"] is not None and fpop["top"].winfo_exists():

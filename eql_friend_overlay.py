@@ -50,7 +50,8 @@ import sys
 import time
 from datetime import datetime
 
-from eql_overlay_common import RETRO_THEMES, DEFAULT_THEME, get_theme, luma
+from eql_overlay_common import (RETRO_THEMES, DEFAULT_THEME, get_theme,
+                                luma, data_path, install_tk_error_logger)
 
 # ----------------------------------------------------------------------------
 # Configuration defaults (all UI-tunable settings persist to SETTINGS_FILE)
@@ -63,8 +64,9 @@ if getattr(sys, "frozen", False):
     APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
-SETTINGS_FILE = os.path.join(APP_DIR, "eql_friend_overlay_settings.json")
-LEGACY_ROSTER_FILE = os.path.join(APP_DIR, "eql_friend_overlay_roster.json")
+SETTINGS_FILE = data_path("eql_friend_overlay_settings.json", APP_DIR)
+ERROR_LOG = data_path("eql_errors.log", APP_DIR)
+LEGACY_ROSTER_FILE = data_path("eql_friend_overlay_roster.json", APP_DIR)
 
 # ----------------------------------------------------------------------------
 # Themes: the shared suite theme set (RETRO_THEMES in eql_overlay_common),
@@ -84,7 +86,7 @@ def roster_path_for(log_path):
     ident = re.sub(r"^eqlog_", "", base)
     ident = re.sub(r"\.txt$", "", ident, flags=re.IGNORECASE)
     ident = re.sub(r"[^A-Za-z0-9_-]", "_", ident) or "default"
-    return os.path.join(APP_DIR, f"eql_friend_overlay_roster_{ident}.json")
+    return data_path(f"eql_friend_overlay_roster_{ident}.json", APP_DIR)
 
 # ----------------------------------------------------------------------------
 # Parsing
@@ -559,6 +561,7 @@ def run_overlay(log_path):
     ONLINE_DOT = OFFLINE_DOT = AFK_DOT = "#000000"
 
     root = tk.Tk()
+    install_tk_error_logger(root, "eql_friend_overlay", ERROR_LOG)
     root.title("EQL Friends")
     root.overrideredirect(True)             # borderless
     root.attributes("-topmost", True)       # float over the game
