@@ -395,8 +395,11 @@ REGEN_RE = re.compile(TS_RE + r"Your wounds begin to heal\.?\s*$")
 #    (the /pet leader command). This is how named pets (necro/mage style,
 #    whose random names carry no owner information) get attributed; warder-
 #    style pets ("<Charname>`s warder") are recognized by pattern alone.
+#    CHARM pets keep their multi-word mob name -- confirmed: "An abhorrent
+#    says, 'My leader is Urgar.'" -- so the name is not a single word.
 PET_LEADER_RE = re.compile(
-    TS_RE + r"(?P<pet>[A-Za-z]+) says, 'My leader is (?P<owner>[A-Za-z]+)\.'\s*$")
+    TS_RE + r"(?P<pet>[A-Za-z][A-Za-z`' -]{0,40}?) says, "
+            r"'My leader is (?P<owner>[A-Za-z]+)\.'\s*$")
 
 # -- /who entries -- confirmed EQL format (same one the Friends Overlay
 #    parses): "[21 DRU] Miranda (Wood Elf)  ZONE: ...". When the name is
@@ -761,6 +764,19 @@ class CombatTracker:
         self._pet_names_lower.add(name.lower())
         self._rebuild_pet_res()
         self._notify()
+
+    def _unregister_pet(self, name):
+        """A registered pet was SLAIN -- forget the name. Vital for CHARM
+        pets, whose generic mob names ("an abhorrent") would otherwise
+        credit every same-named mob as your pet for the rest of the
+        session. Resummoned/recharmed pets announce again via /pet
+        leader."""
+        n = name.strip().lower()
+        if n not in self._pet_names_lower:
+            return
+        self._pet_names_lower.discard(n)
+        self.pet_names = {p for p in self.pet_names if p.lower() != n}
+        self._rebuild_pet_res()
 
     def _rebuild_pet_res(self):
         """(Re)compile pet combat-line regexes anchored on the literal pet
@@ -1637,6 +1653,15 @@ class CombatTracker:
                 self._record_damage(wall_time, m.group("source"),
                                     m.group("target"),
                                     int(m.group("amount")), category="spell")
+            elif self._is_pet(self._n(m.group("source"))):
+                # DoT ticking FROM your pet (charm pets especially) --
+                # "A gnoll has taken 10 damage from Tainted Breath by an
+                # abhorrent."
+                self._record_damage(wall_time, m.group("source"),
+                                    m.group("target"),
+                                    int(m.group("amount")),
+                                    category="spell",
+                                    ability=m.group("spell"))
             return
 
         m = OTHER_HIT_RE.match(line)
@@ -1650,6 +1675,8 @@ class CombatTracker:
                 if self.current is not None:
                     self.current.kills += 1
                 self._notify()
+            if self._is_pet(self._n(m.group("target"))):
+                self._unregister_pet(m.group("target"))   # pet died
             return
 
         m = MEND_RE.match(line)
@@ -1739,6 +1766,10 @@ class CombatTracker:
             self.kills.append(wall_time)
             if self.current is not None:
                 self.current.kills += 1
+            if self._is_pet(self._n(m.group("target"))):
+                # you killed your own (ex-)charm pet -- forget the name so
+                # same-named mobs stop counting as your pet
+                self._unregister_pet(m.group("target"))
             self._notify()
             return
 
