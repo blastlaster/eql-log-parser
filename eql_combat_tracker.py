@@ -401,6 +401,15 @@ PET_LEADER_RE = re.compile(
     TS_RE + r"(?P<pet>[A-Za-z][A-Za-z`' -]{0,40}?) says, "
             r"'My leader is (?P<owner>[A-Za-z]+)\.'\s*$")
 
+# -- pet attack announcement -- confirmed (from the OWNER's own log):
+#    "Becca`s warder told you, 'Attacking an elite gnoll fighter
+#    Master.'"  The pet tells its MASTER and only its master -- so a pet
+#    announcing an attack "to you" in YOUR log is YOURS. This registers
+#    pets (charm pets especially) automatically, without /pet leader:
+#    it fires on every /pet attack, which happens far more often.
+PET_ATTACK_RE = re.compile(
+    TS_RE + r"(?P<pet>.+?) told you, 'Attacking (?P<target>.+?) Master\.'\s*$")
+
 # -- /who entries -- confirmed EQL format (same one the Friends Overlay
 #    parses): "[21 DRU] Miranda (Wood Elf)  ZONE: ...". When the name is
 #    this character, it reveals the player's LEVEL, which buff-duration
@@ -648,6 +657,11 @@ class CombatTracker:
         self._pet_names_lower = set()
         self._pet_hit_out_re = self._pet_hit_in_re = None
         self._rebuild_pet_res()
+        # every player name seen in a /who entry (lowercased). Persistent
+        # like pet_names: players stay players across sessions. Lets pet
+        # heuristics tell mobs from players (a /who name can never be a
+        # charm pet), and is the substrate for future mob-vs-mob analysis.
+        self.known_players = set()
 
     def _reset_session_state(self, wall_time):
         """Start a fresh play session -- called at init and every time the
@@ -1413,13 +1427,29 @@ class CombatTracker:
         m = PET_LEADER_RE.match(line)
         if m:
             if self.self_name and \
-               m.group("owner").lower() == self.self_name.lower():
+               m.group("owner").lower() == self.self_name.lower() \
+               and m.group("pet").lower() not in self.known_players:
+                # known_players guard: a charm pet is a MOB; a name we've
+                # seen in /who is a player and can never be your pet
                 self._register_pet(m.group("pet"))
             return
 
-        # /who entries: learn the player's own level; consume all of them
+        # pet attack announcement: a pet that tells YOU "Attacking X
+        # Master." is YOUR pet (tells go only to the master -- see
+        # PET_ATTACK_RE) -- register it, /pet leader not required
+        m = PET_ATTACK_RE.match(line)
+        if m:
+            pet = m.group("pet")
+            if pet.lower() not in self.known_players:
+                self._register_pet(pet)
+            return
+
+        # /who entries: learn the player's own level (and remember every
+        # player name seen -- the mob-vs-player distinction other
+        # heuristics lean on); consume all of them
         m = WHO_ENTRY_RE.match(line)
         if m:
+            self.known_players.add(m.group("name").lower())
             if self.self_name and \
                m.group("name").lower() == self.self_name.lower():
                 self.player_level = int(m.group("level"))
