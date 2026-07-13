@@ -531,6 +531,7 @@ def run_overlay(log_path):
     # right-click menu ("Fight summary popup"); drag it anywhere; it
     # refreshes in place when the next fight ends. Seeding/backfill never
     # pops it (only fights that end while the meter is LIVE).
+    FP_COLS = 54   # popup text width in characters (rows are built to fit)
     fpop = {"top": None, "text": None, "filter_var": None, "fight": None,
             "live": False}
 
@@ -580,8 +581,10 @@ def run_overlay(log_path):
         fentry.pack(side="left", padx=(4, 0), ipady=1)
         fvar.trace_add("write", lambda *_: _fp_fill())
 
-        txt = tk.Text(top, wrap="none", relief="flat", bg=th["panel"],
-                      fg=th["fg"], font=mono(8), width=52, height=18,
+        # word-wrap so the prose lines (resisted/casts) fold instead of
+        # clipping; height re-fits to the content on every fill
+        txt = tk.Text(top, wrap="word", relief="flat", bg=th["panel"],
+                      fg=th["fg"], font=mono(8), width=FP_COLS, height=12,
                       state="disabled")
         txt.pack(fill="both", expand=True, padx=6, pady=(2, 6))
         txt.tag_configure("h", foreground=th["accent"],
@@ -660,7 +663,7 @@ def run_overlay(log_path):
             total = max(sum(v["total"] for v in dct.values()), 1)
             put(f"\n{label}\n", "b")
             for n, v in sorted(items, key=lambda kv: -kv[1]["total"])[:12]:
-                put(f" {n[:24]:<24}{_fmt_num(v['total']):>8}"
+                put(f" {n[:34]:<34}{_fmt_num(v['total']):>8}"
                     f"{v['total'] / total:>5.0%}  {v['hits']}h\n")
 
         rows(fight.abilities_dmg, "damage")
@@ -670,6 +673,12 @@ def run_overlay(log_path):
         if casts:
             put("\ncasts: " + "  ".join(f"{k} x{v}" for k, v in casts)
                 + "\n", "dim")
+        # re-fit the box to the content: logical lines plus word-wrap
+        # spillover, so NOTHING is ever cut off (within a sane cap)
+        content = txt.get("1.0", "end-1c")
+        n_lines = sum(max(1, -(-len(ln) // FP_COLS))
+                      for ln in content.split("\n"))
+        txt.config(height=min(max(n_lines + 1, 8), 40))
         txt.config(state="disabled")
 
     def show_fight_popup(fight):
