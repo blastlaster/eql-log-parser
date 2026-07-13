@@ -541,7 +541,10 @@ def run_overlay(log_path):
     # Seeding/backfill fills the fight LIST but never pops the window.
     FP_COLS = 54   # popup text width in characters (rows are built to fit)
     fpop = {"top": None, "body": None, "filter_var": None, "counter": None,
-            "fonts": None, "fights": [], "idx": -1, "live": False}
+            "fonts": None, "fights": [], "idx": -1, "live": False,
+            # ">>" flash state: newer fights exist beyond the one shown
+            "btn_last": None, "flash": False, "flash_job": None,
+            "flash_on": False}
 
     def fp_theme():
         return get_theme(settings.get("fight_popup_theme")
@@ -556,6 +559,28 @@ def run_overlay(log_path):
             return
         fpop["idx"] = max(0, min(i, len(fpop["fights"]) - 1))
         _fp_fill()
+
+    def _fp_flash_tick():
+        """Blink >> between dim and warn while newer fights wait beyond
+        the one being viewed; restore and stop once caught up."""
+        b = fpop["btn_last"]
+        alive = b is not None and b.winfo_exists()
+        if not fpop["flash"]:
+            if alive:
+                b.config(fg=fp_theme()["dim"])
+            fpop["flash_on"] = False
+            fpop["flash_job"] = None
+            return
+        if alive:
+            th = fp_theme()
+            fpop["flash_on"] = not fpop["flash_on"]
+            b.config(fg=th["warn"] if fpop["flash_on"] else th["dim"])
+        fpop["flash_job"] = root.after(450, _fp_flash_tick)
+
+    def _fp_flash(on):
+        fpop["flash"] = on
+        if on and fpop["flash_job"] is None:
+            _fp_flash_tick()
 
     def set_fp_theme(key):
         settings["fight_popup_theme"] = key or ""
@@ -644,7 +669,9 @@ def run_overlay(log_path):
 
         nav_btn(" « ", lambda: _fp_nav(0), "left")
         nav_btn(" ‹ ", lambda: _fp_nav(fpop["idx"] - 1), "left")
-        nav_btn(" » ", lambda: _fp_nav(len(fpop["fights"])), "right")
+        fpop["btn_last"] = nav_btn(" » ",
+                                   lambda: _fp_nav(len(fpop["fights"])),
+                                   "right")
         nav_btn(" › ", lambda: _fp_nav(fpop["idx"] + 1), "right")
         counter = tk.Label(nav, text="", bg=th["panel"], fg=th["dim"],
                            font=fonts["f8"])
@@ -708,6 +735,8 @@ def run_overlay(log_path):
         th = fp_theme()
         fonts = fpop["fonts"]
         fpop["idx"] = min(fpop["idx"], len(fights) - 1)
+        if fpop["idx"] >= len(fights) - 1:
+            _fp_flash(False)   # caught up -- stop the >> blink
         fight = fights[fpop["idx"]]
         flt = (fpop["filter_var"].get() or "").strip().lower()
         started = time.strftime("%H:%M:%S", time.localtime(fight.start_wall))
@@ -814,9 +843,13 @@ def run_overlay(log_path):
                 fpop["top"].lift()
             root.after(0, show)
         else:
-            # studying an older fight -> stay put; just refresh the
-            # counter so "of N" grows (>> jumps to the new one)
-            root.after(0, _fp_fill)
+            # studying an older fight -> stay put; refresh the counter so
+            # "of N" grows, and blink >> until the user catches up (via
+            # >> itself or stepping there with >)
+            def nudge():
+                _fp_fill()
+                _fp_flash(True)
+            root.after(0, nudge)
 
     # -- tracker + watcher ---------------------------------------------------
     live = {}
@@ -897,6 +930,7 @@ def run_overlay(log_path):
         fpop["live"] = False   # backfill replay must not pop summaries
         fpop["fights"].clear()   # pagination restarts with the new window
         fpop["idx"] = -1
+        fpop["flash"] = False
         try:
             open_log(path)
         finally:
@@ -1651,10 +1685,14 @@ def run_overlay(log_path):
 
     # -- log polling loop (independent of the faster render loop) --------------
     def poll():
-        live["watcher"].poll()
-        tracker = live["tracker"]
-        live["alltime"].tick(tracker, tracker.current is not None)
-        root.after(POLL_INTERVAL_MS, poll)
+        # the reschedule must survive any parsing hiccup -- an exception
+        # here would otherwise kill log tailing for the rest of the run
+        try:
+            live["watcher"].poll()
+            tracker = live["tracker"]
+            live["alltime"].tick(tracker, tracker.current is not None)
+        finally:
+            root.after(POLL_INTERVAL_MS, poll)
 
     # -- context menu ----------------------------------------------------------
     def set_theme(name):

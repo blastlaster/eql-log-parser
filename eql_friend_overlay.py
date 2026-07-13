@@ -1029,11 +1029,14 @@ def run_overlay(log_path):
 
     # -- poll loop -----------------------------------------------------------
     def tick():
-        live["watcher"].poll()
-        if dirty["flag"]:
-            dirty["flag"] = False
-            render()
-        root.after(POLL_INTERVAL_MS, tick)
+        # reschedule must survive any parsing hiccup, or tailing dies
+        try:
+            live["watcher"].poll()
+            if dirty["flag"]:
+                dirty["flag"] = False
+                render()
+        finally:
+            root.after(POLL_INTERVAL_MS, tick)
 
     render()
     tick()

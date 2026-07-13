@@ -76,10 +76,13 @@ class LogWatcher:
             self._buf = b""
         if size == self._pos:
             return
-        with open(self.path, "rb") as f:
-            f.seek(self._pos)
-            chunk = f.read()
-            self._pos = f.tell()
+        try:
+            with open(self.path, "rb") as f:
+                f.seek(self._pos)
+                chunk = f.read()
+                self._pos = f.tell()
+        except OSError:
+            return   # transient lock (writer/AV/indexer) -- retry next tick
         self._buf += chunk
         while b"\n" in self._buf:
             raw, self._buf = self._buf.split(b"\n", 1)
