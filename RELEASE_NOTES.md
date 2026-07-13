@@ -1,3 +1,25 @@
+# EQL Log Reader — v1.6
+
+**Release date:** July 13, 2026
+
+The Fight Summary grows up: the post-fight popup introduced in v1.5 becomes a full fight browser — paginated across the session with catch-up flashing, its own saved theme with proper Neon HUD transparency, a minimize mode whose filter doubles as a query box, per-stance/invocation time-and-damage shares, and resists in both directions. Plus a log-tailing reliability fix worth updating for on its own.
+
+## What's new in v1.6
+
+**Fight Summary: paginated fight browser.** `‹ ›` step one fight, `«` jumps to the session's first fight, `»` to the newest — seeded history included, so the back-arrows reach fights from before the meter started. A "fight N of M · time" counter sits between. When a new fight ends while you're on the latest one, the popup follows it automatically; while you're studying an older fight it stays put — the counter grows and `»` **flashes** until you catch up (click `»`, or step there with `›`).
+
+**Fight Summary: stance & invocation shares.** Every stance used in the fight with its percentage of active combat time *and* the damage you dealt while in it — `stances: Offense 64% (2.1K dmg)  Defense 36% (900 dmg)` — one line for stances, one for invocations. The numbers answer both "how long was I in it" and "what did it actually produce."
+
+**Fight Summary: resists in both directions.** `enemy resisted: Tishan's Clash x1` (warn color) and `you resisted: Cancelling of Life x1` (green), with section breaks around the stance block for cleaner reading.
+
+**Fight Summary: minimize + query filter.** A `–` button collapses the popup to the title/nav/filter rows; pagination and the `»` flash keep working. Typing in the filter — minimized or not — brings up matching ability/heal/cast rows, and **section names work too**: `stances`, `invocs`, `damage`, `healing`, `casts`, `resisted` pull up that whole section. Minimize it, type `stances`, and arrow through fights watching just that line change.
+
+**Fight Summary: own theme + Neon HUD transparency.** Right-click the popup for its own theme, saved separately (defaults to matching the meter). The body renders with the suite's outlined-text treatment over a chroma-keyed background — true Neon HUD transparency, exactly like the meter and Friends overlay — with the title/nav/filter bars keeping their panel color as the grab handle.
+
+**Log tailing survives transient file locks.** A momentary `PermissionError` on the log (antivirus scan, indexer, backup tool touching the file) could previously kill the polling loop silently — the overlay kept rendering but stopped updating. The watcher now skips the blocked read and retries next tick, and both overlays' poll loops always reschedule.
+
+---
+
 # EQL Log Reader — v1.5
 
 **Release date:** July 12, 2026
@@ -8,13 +30,11 @@ Encounter analytics release: the Session Report learns who you actually fight �
 
 **New Session Report tab: Encounters — per-mob fight history across every session.** Every completed Combat in the whole log becomes an encounter, grouped by the mob it was against. Search a name, see every attempt (when, session, zone, duration, DPS, damage dealt/taken, deaths, stance — best attempt starred), open one for full detail (damage/healing by ability with shares, casts, resists, rates at /s /m /h), and compare any two — or hit **Compare best vs worst** — for a side-by-side plus a ranked **"what changed"** analysis pointing at the likely impact drivers: ability-mix shares, stance/invocation, spells-resisted rate, damage taken, accuracy, crit, deaths, and spells cast in one attempt but not the other. The log is the database — history reaches as far back as the log file does, no new files.
 
-**Fight summary popup (meter).** When a Combat ends, a small draggable window pops up next to the meter with that fight's numbers: who it was against, DPS/DPM/DPH, dealt/taken/healed, accuracy/crit/big, kills/deaths, **resists in both directions** (`enemy resisted: Tishan's Clash x1` in warn, `you resisted: Cancelling of Life x1` in green), **stance and invocation shares** — every stance used in the fight with its percentage of active combat time *and* the damage you dealt while in it (`stances: Offense 64% (2.1K dmg)  Defense 36% (900 dmg)`) — and a **filterable** damage/healing/cast breakdown. It's **paginated across the session's fights**: `‹ ›` step one fight, `«` jumps to the session's first fight, `»` to the newest (seeded history included, so the back-arrows reach fights from before the meter started). When a new fight ends while you're on the latest one, the popup follows it automatically; while you're studying an older fight it stays put — the "fight N of M" counter grows and `»` **flashes** until you catch up to the newest fight (click `»`, or step there with `›`). A **minimize** button (`–`) collapses it to the title/nav/filter rows — pagination and the `»` flash keep working, and typing in the filter while minimized brings up **just the matching rows** for whichever fight is selected (a quick "how much did Chords do that fight?" without the full readout). Right-click the popup for its **own theme** (saved separately; defaults to matching the meter) — including proper **Neon HUD transparency**: the body renders with the suite's outlined-text treatment over a chroma-keyed background, exactly like the meter and Friends overlay, with the title/nav/filter bars keeping their panel color as the grab handle. Never fires during log seeding/backfill; toggle via the meter's right-click → "Fight summary popup".
+**Fight summary popup (meter).** When a Combat ends, a small draggable window pops up next to the meter with that fight's numbers: who it was against, DPS/DPM/DPH, dealt/taken/healed, accuracy/crit/big, kills/deaths, stance, resists, and a **filterable** damage/healing/cast breakdown. It refreshes in place when the next fight ends, never fires during log seeding/backfill, and toggles via right-click → "Fight summary popup". (v1.6 turns this into a full paginated fight browser.)
 
 **Under the hood:** each Fight now carries its own per-fight ability, heal, and cast breakdowns plus kill/death counts (session-wide totals unchanged), and the tracker exposes a completed-fight hook that both features build on.
 
 **Pets register themselves when you send them to attack.** The pet attack announcement — `Becca`s warder told you, 'Attacking an elite gnoll fighter Master.'` (confirmed from the owner's own log; the tell goes only to the master) — now registers the pet automatically. Every `/pet attack` is an ownership proof, so charm pets get attributed without remembering `/pet leader` (which still works too). The tracker also remembers every player name seen in `/who`: a known player name can never register as a pet, a cheap safety net for name collisions and the substrate for future mob-vs-mob attribution heuristics.
-
-**Log tailing survives transient file locks.** A momentary `PermissionError` on the log (antivirus scan, indexer, backup tool touching the file) could previously kill the polling loop silently — the overlay kept rendering but stopped updating. The watcher now skips the blocked read and retries next tick, and both overlays' poll loops always reschedule.
 
 **Charm pets now count as your pet.** The `/pet leader` recognizer only accepted single-word names (necro/mage-style "Jenann"), but a charmed mob keeps its multi-word mob name — confirmed: `An abhorrent says, 'My leader is Urgar.'` — so charm pets never registered and their damage vanished. Multi-word names register now, DoT damage *dealt by* your pet is recorded (it previously only counted DoTs ticking *on* the pet), and a registered pet is forgotten the moment it's slain — critical for charms, whose generic names would otherwise credit every same-named mob as your pet for the rest of the session (re-charming announces again via `/pet leader`). Known edge: between a charm *breaking* and that mob dying, its actions still count as your pet's — the log prints nothing at the moment charm breaks.
 
