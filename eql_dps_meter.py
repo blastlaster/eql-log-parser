@@ -834,28 +834,44 @@ def run_overlay(log_path):
                  (f"deaths {fight.deaths}",
                   "warn" if fight.deaths else None))
             line(("", None))   # breathing room before the stance block
+
+        def lmatch(label):
+            """Filter matches a SECTION header -- typing "stances",
+            "resisted", "damage", "healing", "casts"... pulls up that
+            whole section, minimized or not."""
+            return bool(flt) and flt in label
+
+        drew = False
+        if not minimized or lmatch("stances"):
             drew = share_prose("stances", fight.stance_secs,
                                fight.stance_dmg)
+        if not minimized or lmatch("invocs") or lmatch("invocations"):
             drew |= share_prose("invocs", fight.invocation_secs,
                                 fight.invocation_dmg)
+        if not minimized:
             if not drew:
                 line((f"{fight.stance or '?'} / {fight.invocation or '?'}",
                       "dim"))
             line(("", None))   # ...and after it
-            if fight.spell_resists:
-                prose("enemy resisted: " + "  ".join(
-                    f"{k} x{v}" for k, v in
-                    sorted(fight.spell_resists.items(),
-                           key=lambda kv: -kv[1])), "warn")
-            if fight.you_resisted:
-                prose("you resisted: " + "  ".join(
-                    f"{k} x{v}" for k, v in
-                    sorted(fight.you_resisted.items(),
-                           key=lambda kv: -kv[1])), "good")
+        if fight.spell_resists and (not minimized
+                                    or lmatch("enemy resisted")):
+            prose("enemy resisted: " + "  ".join(
+                f"{k} x{v}" for k, v in
+                sorted(fight.spell_resists.items(),
+                       key=lambda kv: -kv[1])), "warn")
+        if fight.you_resisted and (not minimized
+                                   or lmatch("you resisted")):
+            prose("you resisted: " + "  ".join(
+                f"{k} x{v}" for k, v in
+                sorted(fight.you_resisted.items(),
+                       key=lambda kv: -kv[1])), "good")
 
         def rows(dct, label):
-            items = [(n, v) for n, v in dct.items()
-                     if not flt or flt in n.lower()]
+            if lmatch(label):
+                items = list(dct.items())   # header hit -> whole section
+            else:
+                items = [(n, v) for n, v in dct.items()
+                         if not flt or flt in n.lower()]
             if not items:
                 return
             total = max(sum(v["total"] for v in dct.values()), 1)
@@ -867,8 +883,11 @@ def run_overlay(log_path):
 
         rows(fight.abilities_dmg, "damage")
         rows(fight.abilities_heal, "healing")
-        casts = [(k, v) for k, v in sorted(fight.spell_casts.items())
-                 if not flt or flt in k.lower()]
+        if lmatch("casts"):
+            casts = sorted(fight.spell_casts.items())
+        else:
+            casts = [(k, v) for k, v in sorted(fight.spell_casts.items())
+                     if not flt or flt in k.lower()]
         if casts:
             line(("", None))
             prose("casts: " + "  ".join(f"{k} x{v}" for k, v in casts),
