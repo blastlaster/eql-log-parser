@@ -654,6 +654,29 @@ def run_overlay(log_path):
         fclose.bind("<Enter>", lambda e: fclose.config(fg=th["fg"]))
         fclose.bind("<Leave>", lambda e: fclose.config(fg=th["dim"]))
 
+        # minimize: collapse to the title/nav/filter rows. The filter
+        # keeps working -- typing brings up JUST the matching rows for
+        # whichever fight is selected, and the arrows/flash still work.
+        fmin = tk.Label(fbar, bg=th["panel"], fg=th["dim"],
+                        font=fonts["f9b"], cursor="hand2")
+        fmin.pack(side="right")
+
+        def _fp_apply_min():
+            fmin.config(text=" □ " if settings.get("fight_popup_min", False)
+                        else " – ")
+            _fp_fill()
+
+        def _fp_toggle_min(e=None):
+            settings["fight_popup_min"] = \
+                not settings.get("fight_popup_min", False)
+            settings.save()
+            _fp_apply_min()
+
+        fmin.bind("<Button-1>", _fp_toggle_min)
+        fmin.bind("<Enter>", lambda e: fmin.config(fg=th["fg"]))
+        fmin.bind("<Leave>", lambda e: fmin.config(fg=th["dim"]))
+        _fp_apply_min()
+
         # pagination row: << < [fight i/N - time] > >>
         nav = tk.Frame(top, bg=th["panel"])
         nav.pack(fill="x")
@@ -742,6 +765,16 @@ def run_overlay(log_path):
         started = time.strftime("%H:%M:%S", time.localtime(fight.start_wall))
         fpop["counter"].config(
             text=f"fight {fpop['idx'] + 1} of {len(fights)} · {started}")
+        # minimized: only the title/nav/filter rows show -- unless a
+        # filter is typed, which brings up JUST the matching rows for
+        # the selected fight
+        minimized = settings.get("fight_popup_min", False)
+        if minimized and not flt:
+            if body.winfo_manager():
+                body.pack_forget()
+            return
+        if not body.winfo_manager():
+            body.pack(fill="both", expand=True, padx=6, pady=(2, 6))
         you = fight.actors.get(YOU_LABEL) or {}
         active = fight.elapsed()
         dps = you.get("dmg_out", 0) / active
@@ -771,17 +804,6 @@ def run_overlay(log_path):
             for chunk in textwrap.wrap(text, FP_COLS) or [text]:
                 line((chunk, style))
 
-        line((f"{name}{extra}", "h"))
-        line((f"{m}:{s:02d} (active {active:.0f}s)   ", None),
-             (f"DPS {dps:.1f}", "b"),
-             (f"  DPM {_fmt_num(dps * 60)}  DPH {_fmt_num(dps * 3600)}", None))
-        line((f"dealt {_fmt_num(you.get('dmg_out', 0))}  "
-              f"taken {_fmt_num(you.get('dmg_in', 0))}  "
-              f"healed {_fmt_num(you.get('heal_out', 0))}", None))
-        line((f"acc {acc}%  crit {crit}%  "
-              f"big {_fmt_num(you.get('biggest_hit', 0))}   "
-              f"kills {fight.kills}  ", None),
-             (f"deaths {fight.deaths}", "warn" if fight.deaths else None))
         def share_prose(label, secs, dmg):
             """"stances: Defense 72% (2.1K dmg)  Evasive 28% (900 dmg)" --
             time share of the fight's ACTIVE seconds plus your damage
@@ -795,17 +817,33 @@ def run_overlay(log_path):
             prose(f"{label}: " + "  ".join(parts), "dim")
             return True
 
-        drew = share_prose("stances", fight.stance_secs, fight.stance_dmg)
-        drew |= share_prose("invocs", fight.invocation_secs,
-                            fight.invocation_dmg)
-        if not drew:
-            line((f"{fight.stance or '?'} / {fight.invocation or '?'}",
-                  "dim"))
-        if fight.spell_resists:
-            prose("resisted: " + "  ".join(
-                f"{k} x{v}" for k, v in sorted(fight.spell_resists.items(),
-                                               key=lambda kv: -kv[1])),
-                "warn")
+        if not minimized:
+            # full header block; minimized-with-filter shows rows only
+            line((f"{name}{extra}", "h"))
+            line((f"{m}:{s:02d} (active {active:.0f}s)   ", None),
+                 (f"DPS {dps:.1f}", "b"),
+                 (f"  DPM {_fmt_num(dps * 60)}  DPH {_fmt_num(dps * 3600)}",
+                  None))
+            line((f"dealt {_fmt_num(you.get('dmg_out', 0))}  "
+                  f"taken {_fmt_num(you.get('dmg_in', 0))}  "
+                  f"healed {_fmt_num(you.get('heal_out', 0))}", None))
+            line((f"acc {acc}%  crit {crit}%  "
+                  f"big {_fmt_num(you.get('biggest_hit', 0))}   "
+                  f"kills {fight.kills}  ", None),
+                 (f"deaths {fight.deaths}",
+                  "warn" if fight.deaths else None))
+            drew = share_prose("stances", fight.stance_secs,
+                               fight.stance_dmg)
+            drew |= share_prose("invocs", fight.invocation_secs,
+                                fight.invocation_dmg)
+            if not drew:
+                line((f"{fight.stance or '?'} / {fight.invocation or '?'}",
+                      "dim"))
+            if fight.spell_resists:
+                prose("resisted: " + "  ".join(
+                    f"{k} x{v}" for k, v in
+                    sorted(fight.spell_resists.items(),
+                           key=lambda kv: -kv[1])), "warn")
 
         def rows(dct, label):
             items = [(n, v) for n, v in dct.items()
@@ -827,6 +865,8 @@ def run_overlay(log_path):
             line(("", None))
             prose("casts: " + "  ".join(f"{k} x{v}" for k, v in casts),
                   "dim")
+        if not L:
+            line((f"(no match for {flt!r} in this fight)", "dim"))
 
         # render: fixed-advance x per segment, line height from the font
         body.delete("all")
