@@ -793,6 +793,7 @@ def run_overlay(log_path):
                   "b": (th["fg"], fonts["f8b"]),
                   "dim": (th["dim"], fonts["f8"]),
                   "warn": (th["warn"], fonts["f8"]),
+                  "good": (th.get("alt", th["fg"]), fonts["f8"]),
                   None: (th["fg"], fonts["f8"])}
         L = []
 
@@ -832,6 +833,7 @@ def run_overlay(log_path):
                   f"kills {fight.kills}  ", None),
                  (f"deaths {fight.deaths}",
                   "warn" if fight.deaths else None))
+            line(("", None))   # breathing room before the stance block
             drew = share_prose("stances", fight.stance_secs,
                                fight.stance_dmg)
             drew |= share_prose("invocs", fight.invocation_secs,
@@ -839,11 +841,17 @@ def run_overlay(log_path):
             if not drew:
                 line((f"{fight.stance or '?'} / {fight.invocation or '?'}",
                       "dim"))
+            line(("", None))   # ...and after it
             if fight.spell_resists:
-                prose("resisted: " + "  ".join(
+                prose("enemy resisted: " + "  ".join(
                     f"{k} x{v}" for k, v in
                     sorted(fight.spell_resists.items(),
                            key=lambda kv: -kv[1])), "warn")
+            if fight.you_resisted:
+                prose("you resisted: " + "  ".join(
+                    f"{k} x{v}" for k, v in
+                    sorted(fight.you_resisted.items(),
+                           key=lambda kv: -kv[1])), "good")
 
         def rows(dct, label):
             items = [(n, v) for n, v in dct.items()

@@ -559,6 +559,9 @@ class Fight:
         # spell -> times a mob resisted it DURING this fight (the meter's
         # RESISTED block; session-wide counts live on the tracker)
         self.spell_resists = {}
+        # spell -> times YOU resisted it this fight ("You resist a necro
+        # acolyte's Cancelling of Life!")
+        self.you_resisted = {}
         # per-fight detail for encounter analytics (the Session Report's
         # Encounters tab and the meter's fight-summary popup): YOUR
         # ability/heal breakdowns, casts, and kill/death counts scoped to
@@ -1549,8 +1552,14 @@ class CombatTracker:
                     self.current.spell_resists.get(spell, 0) + 1
             self._notify()
             return
-        if RESIST_IN_RE.match(line) or RESIST_IN_CLASSIC_RE.match(line):
+        m = RESIST_IN_RE.match(line) or RESIST_IN_CLASSIC_RE.match(line)
+        if m:
             self.resists_incoming += 1
+            if self.current is not None:
+                # per-fight tally for the fight summary's "you resisted"
+                fr = self.current.you_resisted
+                spell = m.group("spell")
+                fr[spell] = fr.get(spell, 0) + 1
             self._notify()
             return
         m = FIZZLE_RE.match(line)
