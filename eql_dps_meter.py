@@ -782,7 +782,25 @@ def run_overlay(log_path):
               f"big {_fmt_num(you.get('biggest_hit', 0))}   "
               f"kills {fight.kills}  ", None),
              (f"deaths {fight.deaths}", "warn" if fight.deaths else None))
-        line((f"{fight.stance or '?'} / {fight.invocation or '?'}", "dim"))
+        def share_prose(label, secs, dmg):
+            """"stances: Defense 72% (2.1K dmg)  Evasive 28% (900 dmg)" --
+            time share of the fight's ACTIVE seconds plus your damage
+            dealt while in each. Skipped when nothing was ever known."""
+            known = {n: s for n, s in secs.items() if n != "?" or len(secs) > 1}
+            if not known:
+                return False
+            tot = max(sum(secs.values()), 0.001)
+            parts = [f"{n} {s / tot:.0%} ({_fmt_num(dmg.get(n, 0))} dmg)"
+                     for n, s in sorted(known.items(), key=lambda kv: -kv[1])]
+            prose(f"{label}: " + "  ".join(parts), "dim")
+            return True
+
+        drew = share_prose("stances", fight.stance_secs, fight.stance_dmg)
+        drew |= share_prose("invocs", fight.invocation_secs,
+                            fight.invocation_dmg)
+        if not drew:
+            line((f"{fight.stance or '?'} / {fight.invocation or '?'}",
+                  "dim"))
         if fight.spell_resists:
             prose("resisted: " + "  ".join(
                 f"{k} x{v}" for k, v in sorted(fight.spell_resists.items(),

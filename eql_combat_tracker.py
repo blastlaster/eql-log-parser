@@ -568,6 +568,12 @@ class Fight:
         self.spell_casts = {}
         self.kills = 0
         self.deaths = 0
+        # stance/invocation shares within THIS fight: active seconds spent
+        # in each (fed by touch) and YOUR damage dealt while in each
+        self.stance_secs = {}
+        self.stance_dmg = {}
+        self.invocation_secs = {}
+        self.invocation_dmg = {}
 
     def enemies(self):
         """(name, actor-dict) for every non-you/non-pet actor, biggest
@@ -582,15 +588,23 @@ class Fight:
     def actor(self, name):
         return self.actors.setdefault(name, _blank_actor())
 
-    def touch(self, wall_time):
+    def touch(self, wall_time, stance=None, invocation=None):
         # Accumulate ACTIVE combat time: the gap since the previous damage
         # event counts in full only up to ACTIVE_GAP_CAP. Longer gaps
         # (looting, medding, running to the next mob -- anything under the
         # 45s idle timeout chains into the same Fight) are capped so
-        # downtime between pulls can't dilute DPS.
+        # downtime between pulls can't dilute DPS. Each increment is also
+        # attributed to the CURRENT stance/invocation, giving the fight
+        # summary its per-stance time shares.
         gap = wall_time - self.last_wall
         if gap > 0:
-            self.active_secs += min(gap, ACTIVE_GAP_CAP)
+            inc = min(gap, ACTIVE_GAP_CAP)
+            self.active_secs += inc
+            st = stance or "?"
+            self.stance_secs[st] = self.stance_secs.get(st, 0.0) + inc
+            inv = invocation or "?"
+            self.invocation_secs[inv] = \
+                self.invocation_secs.get(inv, 0.0) + inc
             self.last_wall = wall_time
 
     def elapsed(self):
@@ -841,7 +855,7 @@ class CombatTracker:
             self.current.stance = self.stance
             self.current.invocation = self.invocation
         self._last_activity_wall = wall_time
-        self.current.touch(wall_time)
+        self.current.touch(wall_time, self.stance, self.invocation)
 
     def _end_fight(self):
         if self.current and self.current.total_dmg_out() + self.current.total_heal_out() > 0:
@@ -956,6 +970,14 @@ class CombatTracker:
             self._push_recent("dmg_out", wall_time, amount, category)
             setattr(self, f"{category}_dmg_out",
                     getattr(self, f"{category}_dmg_out") + amount)
+            # damage attributed to the stance/invocation active RIGHT NOW
+            # (fight summary's per-stance damage shares)
+            st = self.stance or "?"
+            self.current.stance_dmg[st] = \
+                self.current.stance_dmg.get(st, 0) + amount
+            inv = self.invocation or "?"
+            self.current.invocation_dmg[inv] = \
+                self.current.invocation_dmg.get(inv, 0) + amount
             if swing:
                 self.swings_hit += 1
                 self.biggest_hit = max(self.biggest_hit, amount)
