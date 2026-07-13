@@ -88,6 +88,7 @@ for you automatically.
    (The trailing `/pause 60 | /who` runs a plain `/who` six seconds later —
    that's what reveals your own level to the log, which the duration
    estimates scale by.)
+   <img width="178" height="123" alt="image" src="https://github.com/user-attachments/assets/0fd1b78b-e28f-46f9-8504-f456f2f96084" />
 6. Place the macro in the last slot of your main hotbar (slot 12) — any slot
    works, this is just what the rest of these steps assume.
 7. Press `Alt+O` to open Settings, then go to Controls > Hotbar 1 > Button 12
