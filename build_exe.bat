@@ -5,8 +5,8 @@ cd /d "%~dp0"
 echo ============================================================
 echo  EQL Log Reader -- build_exe.bat
 echo ============================================================
-echo  Builds all four tools (Launcher, Friends Overlay, DPS/HPS
-echo  Meter, Session Report) into one shared onedir bundle via
+echo  Builds all five tools (Launcher, Friends Overlay, DPS/HPS
+echo  Meter, Session Report, Atlas Collector) into one onedir bundle via
 echo  eql_suite.spec. Output lands in "dist\EQL Log Reader\".
 echo ============================================================
 echo.
@@ -18,6 +18,18 @@ if errorlevel 1 (
     echo         and check "Add python.exe to PATH" during setup.
     pause
     exit /b 1
+)
+
+rem A venv created by an older/removed Python breaks silently after an
+rem upgrade: activate "works" but its python is dead, the system python
+rem takes over, pip falls back to the user site, and "pyinstaller" isn't
+rem on PATH. Detect that and rebuild the venv from scratch.
+if exist ".buildenv" (
+    ".buildenv\Scripts\python.exe" -c "import sys" >nul 2>&1
+    if errorlevel 1 (
+        echo Stale .buildenv from a previous Python -- rebuilding it ...
+        rmdir /s /q ".buildenv"
+    )
 )
 
 if not exist ".buildenv" (
@@ -55,7 +67,8 @@ if exist "dist" rmdir /s /q "dist"
 
 echo.
 echo Building eql_suite.spec (onedir, all five tools, UPX off) ...
-pyinstaller --noconfirm --clean eql_suite.spec
+rem python -m: immune to Scripts\ not being on PATH
+python -m PyInstaller --noconfirm --clean eql_suite.spec
 if errorlevel 1 (
     echo [ERROR] PyInstaller build failed -- see the output above.
     call deactivate
