@@ -30,14 +30,19 @@ searches never pollute the roster and can pop up in their own window.
 Per-character rosters persist between sessions.
 
 **DPS/HPS Meter** (`eql_dps_meter.py`) — retro live combat meter: DPS, HPS,
-DTPS with melee/spell/song/damage-shield splits, damage sources split six
-ways (Melee / Skill / Spell / Song / DS / Pet), your pet tracked as its own
-actor, accuracy/crit/biggest-hit, kill rate, stance & invocation tracking,
-and a persistent ALL TIME block (lifetime accuracy, crits, biggest hit,
-kills, and share of combat time per stance/invocation). A BUFFS block
-lists the buffs/debuffs currently on you with estimated countdowns
-(durations from the spell file; the log's buff lines carry no spell name,
-so they're attributed via `spells_us_str.txt` messages). Rates divide by
+DTPS with melee/ranged/spell/poison/song/damage-shield splits, damage
+sources split up to eight ways (Melee / Skill / Ranged / Spell / Poison /
+Song / DS / Pet — rows follow your build: only sources your `/who` class
+combination and damage history actually use are shown), your pet tracked
+as its own actor, accuracy/crit/biggest-hit, kill rate, stance &
+invocation tracking, and a persistent ALL TIME block (lifetime accuracy,
+crits, biggest hit, kills, and share of combat time per
+stance/invocation) kept **per build** — change your class combination and
+the meter saves one build's lifetime stats and loads the other's. A
+BUFFS block lists the buffs/debuffs currently on you with estimated
+countdowns (durations from the spell file; the log's buff lines carry no
+spell name, so they're attributed via `spells_us_str.txt` messages),
+scrollable with the mouse wheel when more are up than fit. Rates divide by
 *active* combat time — downtime between chained pulls is capped out, so the
 numbers reflect how hard you actually hit. Right-click for options: themes,
 vertical/horizontal layout, fight-average vs rolling 10s/30s windows,
@@ -47,7 +52,9 @@ block on/off.
 **Session Report** (`eql_session_report.py`) — deep-dive companion:
 damage/healing by ability with category filter and search, bar-chart graphs
 (damage by ability, DPS per fight), session-vs-session comparison with
-best-session stars, persistent personal records, stance/invocation
+best-session stars and a Build column/filter (each session is tagged with
+the `/who` class combination it ran under, so builds can be compared
+against each other), persistent personal records, stance/invocation
 performance, spells cast (mana/cast/recast/duration from `spells_us.txt`,
 plus per-spell resist counts and fizzle/interrupt totals), buff/debuff
 uptime on you (log lines like "You feel armored." carry no spell name — the
