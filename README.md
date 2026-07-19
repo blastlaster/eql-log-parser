@@ -61,9 +61,31 @@ uptime on you (log lines like "You feel armored." carry no spell name — the
 report attributes them via the game's own `spells_us_str.txt` message
 table), and an unrecognized-line calibration tab.
 
+**Atlas Collector** (`eql_atlas.py`) — cartography companion: builds your
+personal loot/spawn database as you play, entirely from the log. Every
+kill, drop (EQL auto-loot names the mob, so attribution is exact), corpse
+coin, and death is recorded — placed on the map whenever a recent `/loc`
+is available. First launch imports your ENTIRE existing log history;
+afterwards a saved log position means restarts only catch up (nothing is
+double-counted). Ships with an optional **baseline** layer
+(`eql_atlas_baseline.json.gz`, distilled from the public Project Quarm
+database — same EQMacEmu lineage as EQL): expected drop rates, named-mob
+spawn points, and respawn timers your own play then confirms, contradicts,
+or extends (drops the baseline doesn't know are flagged ★NEW). Includes a
+**map window** (right-click the panel → Map window): Brewall-compatible
+zone maps with pan/zoom, an orbitable **3D view** built from the map
+files' true z data, per-story floor filter, auto-follow, chroma-key ghost
+mode, death marks, hover cards on every pin (drops + percentages), and a
+**guide** that routes you to any item — A* along the map's own geometry
+in-zone, zone-by-zone directions across the world. A **search bar** (and a
+private in-game chat channel — see setup below) drives it all:
+`find <item>`, `guide <item>`, `note <text>`, `fav <item>`.
+
 Shared library code (not run directly): `eql_overlay_common.py` (log
 tailing, settings, themes), `eql_combat_tracker.py` (the combat parser),
-`eql_spell_db.py` (spells_us.txt reader).
+`eql_spell_db.py` (spells_us.txt reader), `eql_atlas_map.py` (the Atlas
+map window). `eql_atlas_baseline_build.py` is a dev tool that regenerates
+the baseline from a Quarm database dump.
 
 ## Themes
 
@@ -74,6 +96,45 @@ floats directly over the game (Windows; the report and launcher render it
 as a plain dark palette). Pick a theme from each applet's right-click menu
 (overlays), the Theme dropdown (Session Report), or the Theme button
 (Launcher).
+
+## In-game setup (Atlas Collector)
+
+The Atlas works read-only out of the box, but two in-game habits unlock
+all of it:
+
+**1. Positions — `/loc`.** The log only knows where you are when `/loc`
+runs. Fold one into a hotbutton you already spam (attack, taunt, a nuke)
+and every kill/drop/death lands on the map; without it, events still
+count, just unplaced. The map's live marker, trail, floor auto-filter,
+and guide line all key off it.
+
+**2. Commands — a private chat channel.** Commands ride a password-
+protected channel only you are in. Per character, per machine:
+
+1. `/log on`, and confirm the log has **timestamps** (lines must start
+   with `[Tue Jul 21 ...]` — enable chat timestamps in Options if not).
+   Without timestamps the Atlas ignores every line.
+2. `/join <name>:<password>` — letters/numbers only, e.g.
+   `/join mirandacmd:swordfish`. Use a **throwaway password** (it appears
+   in plaintext in your own log) and a **different channel per
+   character** — the tool locks commands unless the channel has exactly
+   one member, so two characters sharing one channel lock each other out.
+3. `/autojoin <name>:<password>` — **the critical step**: its
+   confirmation line is what the Atlas learns your channel from (and it
+   re-joins you every login).
+4. `/list` — must show `(1)` after your channel name. The panel flips
+   from `cmd [...] LOCKED` to `cmd [...] ready`.
+5. Talk to the tool with `/1 find batwing` (the channel slot number from
+   `/list`), or set the channel as your chat window's default and type
+   commands bare. `help` lists them: `find`, `guide`, `clear`, `note`,
+   `fav`.
+
+Safety model: only YOUR messages ever parse (the log renders you as
+"You tell..." and everyone else as "<Name> tells..." — impersonation is
+structurally impossible); commands lock the instant anyone else speaks in
+the channel and stay locked until `/list` shows one member again; public
+channels, says, tells, and group chat are never parsed. The panel's
+search bar accepts the same commands without any channel at all.
 
 ## In-game setup (Friends Overlay)
 
