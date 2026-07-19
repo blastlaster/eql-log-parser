@@ -89,7 +89,7 @@ the baseline from a Quarm database dump.
 
 ## Themes
 
-One shared theme set across all four applets: **16-bit Window** (the
+One shared theme set across all five applets: **16-bit Window** (the
 default), CRT Terminal, Arcade LED, Vintage (text-only rows), and
 **Neon HUD** — a fully transparent mode where black-outlined neon text
 floats directly over the game (Windows; the report and launcher render it
